@@ -1,0 +1,24 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+
+# Node
+node_modules/
+.npm/
+
+# Tooling / temp
+*.log
+.DS_Store
+
+# Eval run outputs (generated, not source)
+eval_runs/
+
+# Local secrets / compose overrides
+.env
+.env.*
+!.env.example

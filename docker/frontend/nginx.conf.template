@@ -1,0 +1,64 @@
+server {
+  listen ${NGINX_PORT};
+  server_name _;
+
+  gzip on;
+  gzip_vary on;
+  gzip_min_length 1024;
+  gzip_types
+    text/plain
+    text/css
+    application/json
+    application/javascript
+    text/xml
+    application/xml
+    image/svg+xml;
+
+  root /usr/share/nginx/html;
+  index index.html;
+
+  location = / {
+    try_files /static/index.html =404;
+  }
+
+  location = /static/index.html {
+    expires -1;
+    add_header Cache-Control "no-store";
+  }
+
+  location / {
+    try_files $uri $uri/ /static/index.html;
+  }
+
+  location = /static/runtime-config.js {
+    expires -1;
+    add_header Cache-Control "no-store";
+  }
+
+  location ~* ^/static/(app\.js|styles\.css|favicon\.svg)$ {
+    expires 7d;
+    add_header Cache-Control "public, max-age=604800, immutable";
+  }
+
+  location /static/ {
+    expires 1h;
+    add_header Cache-Control "public, max-age=3600";
+  }
+
+  location /llm/ {
+    limit_except GET POST OPTIONS {
+      deny all;
+    }
+
+    proxy_http_version 1.1;
+    proxy_buffering off;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Authorization "${LLM_UI_PROXY_AUTH_HEADER}";
+    proxy_pass ${LLM_UI_PROXY_TARGET}/;
+  }
+}

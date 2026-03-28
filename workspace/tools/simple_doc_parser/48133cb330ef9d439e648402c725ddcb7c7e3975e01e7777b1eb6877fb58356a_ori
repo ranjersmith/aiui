@@ -1,0 +1,19 @@
+[
+  {
+    "page_num": 1,
+    "content": [
+      {
+        "text": "Line 1",
+        "token": 3
+      },
+      {
+        "text": "",
+        "token": 0
+      },
+      {
+        "text": "Line 2 with F=ma",
+        "token": 7
+      }
+    ]
+  }
+]

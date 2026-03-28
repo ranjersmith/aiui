@@ -1,0 +1,37 @@
+{
+  "name": "aiui",
+  "version": "1.0.0",
+  "description": "Minimal chat UI for a local `llama.cpp` server.",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "stack:up": "./scripts/stack.sh up",
+    "stack:down": "./scripts/stack.sh down",
+    "stack:status": "./scripts/stack.sh status",
+    "stack:health": "./scripts/stack.sh health",
+    "bench:llm": "python3 ./scripts/bench_llm.py",
+    "coding:chat": "python3 ./scripts/coding_chat.py",
+    "eval:ab:auto": "./scripts/ab_eval_auto.sh",
+    "eval:frontdoor": "python3 ./scripts/eval_frontdoor.py",
+    "build:frontend": "node ./scripts/build_frontend.mjs",
+    "test:frontend": "tsx --test ./frontend-tests/*.test.mjs",
+    "lint:css": "stylelint \"static/**/*.css\" --ignore-pattern \"static/vendor/**/*.css\"",
+    "lint:html": "htmlhint \"static/**/*.html\"",
+    "verify:all": "./scripts/verify_all.sh"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "solid-js": "^1.9.9"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.9",
+    "htmlhint": "^1.9.2",
+    "stylelint": "^16.14.1",
+    "tsx": "^4.20.5"
+  }
+}
