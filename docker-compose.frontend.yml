@@ -16,4 +16,9 @@ services:
       LLM_UI_MODEL: "Qwen/Qwen3-VL-8B-Instruct"
       LLM_UI_TEMPERATURE: "0.3"
       LLM_UI_MAX_TOKENS: "4096"
+      # Backend target used by /llm proxy from inside the UI container.
+      # Default points to host-published qwen backend port.
+      LLM_BACKEND_URL: "${LLM_BACKEND_URL:-http://host.docker.internal:8081}"
       LLM_UI_SYSTEM_PROMPT: "You are a concise technical assistant. When writing math, output valid LaTeX for KaTeX only. Use inline math with $$...$$ and display math with $$$$...$$$$. Do not escape math delimiters: never output \\$ or \\$$ when you mean math. Never use bracket placeholders like [ ... ] or ( ... ) to represent rendered math. Never include labels like 'Rendered Output:' or markdown tables unless explicitly requested. Return plain markdown only. Preserve backslashes in LaTeX commands and prefer standard commands (e.g., \\frac, \\sqrt, \\theta, \\alpha)."
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
