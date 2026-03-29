@@ -1,32 +1,31 @@
-export type Role = "user" | "assistant";
-
-export type ChatMessage = {
-  role: Role;
-  content: string;
-};
+export type ProviderKind = "openai";
 
 export type RuntimeConfig = {
-  provider: "aiui-proxy" | "openai";
+  provider: ProviderKind;
   baseUrl: string;
   model: string;
   temperature: number;
   maxTokens: number;
+  systemPrompt: string;
+};
+
+export type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
 };
 
 export type StreamHandlers = {
-  onMeta: (model: string) => void;
-  onStatus: (text: string) => void;
+  onMeta: (modelName: string) => void;
+  onStatus: (textStatus: string) => void;
   onToken: (delta: string) => void;
-  onDone: (summary: string) => void;
-  onError: (text: string) => void;
+  onDone: (summary?: string) => void;
+  onError: (errorText: string) => void;
 };
 
-export type StreamRequest = {
+export type StreamProvider = (args: {
   config: RuntimeConfig;
   userText: string;
   history: ChatMessage[];
   signal: AbortSignal;
   handlers: StreamHandlers;
-};
-
-export type StreamProvider = (request: StreamRequest) => Promise<void>;
+}) => Promise<void>;

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import ast
 import base64
 import binascii
+import copy
 import io
 import json
 import math
 import mimetypes
+import operator
 import os
 import re
 import shutil
@@ -15,9 +18,11 @@ import tempfile
 import time
 import urllib.parse
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 from xml.etree import ElementTree as ET
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -31,11 +36,49 @@ FAST_LLM_BASE_URL = os.getenv("AIUI_FAST_LLM_BASE_URL", "http://host.docker.inte
 DEFAULT_MODEL = os.getenv("AIUI_DEFAULT_MODEL", "Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf")
 REQUEST_TIMEOUT_SECONDS = int(os.getenv("AIUI_REQUEST_TIMEOUT_SECONDS", "120"))
 SYSTEM_PROMPT = os.getenv("AIUI_SYSTEM_PROMPT", "You are a concise, helpful assistant.").strip()
+# CANONICAL MATH DELIMITER CONTRACT (enforced across app.py and app.ts):
+# - Inline math: \(...\) — KaTeX-compatible, never use single $
+# - Display math: $$...$$ — multiline equations
+# - All delimiters must be balanced and closed
+RESPONSE_FORMAT_GUIDANCE = (
+    "Response format requirements:\n"
+    "- Return valid Markdown.\n"
+    "- Use \\(...\\) for inline math (canonical delimiter). Never use single $.\n"
+    "- Use $$...$$ for display math.\n"
+    "- Every math delimiter must be balanced and closed.\n"
+    "- Before finishing, verify there are no unmatched $, $$, \\(, or \\).\n"
+    "- Do not place LaTeX outside math delimiters.\n"
+    "- Do not wrap equations in bold or italics.\n"
+    "- Leave a blank line before and after headings, lists, and display equations.\n"
+    "- Keep headings complete (for example, '## Heading').\n"
+    "- Keep lists valid and consistently indented.\n"
+    "- Do not emit truncated or unfinished sentences.\n"
+    "- Close all formatting markers: **, _, and code fences."
+)
 DEFAULT_API_KEY = os.getenv("AIUI_OPENAI_API_KEY", "").strip()
 UPSTREAM_HEALTH_TIMEOUT_SECONDS = float(os.getenv("AIUI_UPSTREAM_HEALTH_TIMEOUT_SECONDS", "8"))
 CONTEXT_BUDGET_TOKENS = int(os.getenv("AIUI_CONTEXT_BUDGET_TOKENS", "4096"))
 CONTEXT_REPLY_RESERVE_TOKENS = int(os.getenv("AIUI_CONTEXT_REPLY_RESERVE_TOKENS", "1024"))
 MODULE_CATALOG_CACHE_TTL_SECONDS = float(os.getenv("AIUI_MODULE_CATALOG_CACHE_TTL_SECONDS", "60"))
+AGENT_MAX_LLM_CALLS_PER_RUN = int(os.getenv("AIUI_AGENT_MAX_LLM_CALLS_PER_RUN", "6"))
+AGENT_MAX_TOOL_CALLS_PER_TURN = int(os.getenv("AIUI_AGENT_MAX_TOOL_CALLS_PER_TURN", "4"))
+AGENT_ENABLE_NON_STREAM_LOOP = os.getenv("AIUI_AGENT_ENABLE_NON_STREAM_LOOP", "1").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
+AGENT_ENABLE_STREAM_LOOP = os.getenv("AIUI_AGENT_ENABLE_STREAM_LOOP", "1").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
+# SECURITY: Disable doc/ppt external extractors by default to avoid unexpected process spawning.
+# Set AIUI_ENABLE_EXTERNAL_EXTRACTORS=1 to enable catppt, catdoc, antiword extraction.
+ENABLE_EXTERNAL_EXTRACTORS = os.getenv("AIUI_ENABLE_EXTERNAL_EXTRACTORS", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
 MAX_ATTACHMENTS = int(os.getenv("AIUI_MAX_ATTACHMENTS", os.getenv("AIUI_MAX_IMAGE_ATTACHMENTS", "4")))
 MAX_ATTACHMENT_DATA_URL_CHARS = int(
     os.getenv("AIUI_MAX_ATTACHMENT_DATA_URL_CHARS", os.getenv("AIUI_MAX_IMAGE_DATA_URL_CHARS", "8000000"))
@@ -46,6 +89,7 @@ MAX_TOTAL_DOCUMENT_TEXT_CHARS = int(os.getenv("AIUI_MAX_TOTAL_DOCUMENT_TEXT_CHAR
 IMAGE_PART_TOKEN_ESTIMATE = int(os.getenv("AIUI_IMAGE_PART_TOKEN_ESTIMATE", "768"))
 PARKER_EVIDENCE_LABEL_RE = re.compile(r"\[E\d+\]")
 PARKER_EVIDENCE_BULLET_RE = re.compile(r"(?mi)^\s*-\s*\[E\d+\]\s+")
+TOOL_CALL_BLOCK_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.IGNORECASE | re.DOTALL)
 _MODULE_CATALOG_CACHE: dict[str, Any] = {"expires_at": 0.0, "body": None}
 TEXT_DOCUMENT_EXTENSIONS = {
     ".txt",
@@ -69,6 +113,320 @@ TEXT_DOCUMENT_EXTENSIONS = {
 }
 WORDPROCESSINGML_NAMESPACE = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
 DRAWINGML_TEXT_TAG = "{http://schemas.openxmlformats.org/drawingml/2006/main}t"
+
+
+def build_agent_tool_specs() -> list[dict[str, Any]]:
+    return [
+        {
+            "name": "get_current_time",
+            "description": "Get the current date and time. Optionally provide a timezone like UTC, America/New_York, Europe/London, or Asia/Tokyo.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone name, e.g., UTC or America/New_York",
+                    }
+                },
+                "required": [],
+            },
+        },
+        {
+            "name": "calculator",
+            "description": "Evaluate a safe arithmetic expression using +, -, *, /, //, %, and **.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "expression": {
+                        "type": "string",
+                        "description": "Arithmetic expression such as (12 + 5) * 3 / 2",
+                    }
+                },
+                "required": ["expression"],
+            },
+        },
+        {
+            "name": "search_conversation",
+            "description": "Search prior conversation turns and return the most relevant snippets.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Keywords to search in prior conversation turns",
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of snippets to return",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    ]
+
+
+def build_nous_tools_instruction(tool_specs: list[dict[str, Any]]) -> str:
+    tool_descs = "\n".join(
+        json.dumps({"type": "function", "function": spec}, ensure_ascii=False) for spec in tool_specs
+    )
+    return (
+        "# Tools\n\n"
+        "You may call one or more functions to assist with the user query.\n\n"
+        "You are provided with function signatures within <tools></tools> XML tags:\n"
+        "<tools>\n"
+        f"{tool_descs}\n"
+        "</tools>\n\n"
+        "For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n"
+        "<tool_call>\n"
+        '{"name": <function-name>, "arguments": <args-json-object>}\n'
+        "</tool_call>"
+    )
+
+
+def inject_tools_into_messages(messages: list[dict[str, Any]], tool_specs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not tool_specs:
+        return messages
+
+    out = copy.deepcopy(messages)
+    tool_instruction = build_nous_tools_instruction(tool_specs)
+
+    if out and out[0].get("role") == "system":
+        current = str(out[0].get("content") or "")
+        if "<tools>" not in current:
+            out[0]["content"] = f"{current}\n\n{tool_instruction}".strip()
+    else:
+        out.insert(0, {"role": "system", "content": tool_instruction})
+    return out
+
+
+def _parse_tool_call_payload(raw_payload: str) -> tuple[str, dict[str, Any]] | None:
+    payload = str(raw_payload or "").strip()
+    if not payload:
+        return None
+    try:
+        parsed = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+
+    name = str(parsed.get("name") or "").strip()
+    if not name:
+        return None
+    arguments = parsed.get("arguments")
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except json.JSONDecodeError:
+            arguments = {"raw": arguments}
+    if not isinstance(arguments, dict):
+        arguments = {}
+    return name, arguments
+
+
+def parse_assistant_tool_calls(text: str) -> tuple[list[tuple[str, dict[str, Any]]], str]:
+    if not text:
+        return [], ""
+
+    calls: list[tuple[str, dict[str, Any]]] = []
+    for match in TOOL_CALL_BLOCK_RE.finditer(text):
+        parsed = _parse_tool_call_payload(match.group(1))
+        if parsed is not None:
+            calls.append(parsed)
+
+    visible_text = TOOL_CALL_BLOCK_RE.sub("", text).strip()
+    return calls, visible_text
+
+
+def parse_stream_delta_for_tool_events(
+    buffer: str,
+) -> tuple[list[str], list[dict[str, Any]], str]:
+    """Extract complete <tool_call> blocks from a streaming buffer.
+
+    Returns:
+      visible_chunks: text segments safe to render to user.
+      tool_events: parsed tool call events.
+      remainder: partial tail to keep buffering.
+    """
+    visible_chunks: list[str] = []
+    tool_events: list[dict[str, Any]] = []
+    working = str(buffer or "")
+
+    while True:
+        match = TOOL_CALL_BLOCK_RE.search(working)
+        if not match:
+            # Keep a small tail in case a <tool_call> tag is split across chunks.
+            keep_tail = len("<tool_call>") - 1
+            if len(working) > keep_tail:
+                visible_chunks.append(working[:-keep_tail])
+                working = working[-keep_tail:]
+            return visible_chunks, tool_events, working
+
+        before = working[: match.start()]
+        if before:
+            visible_chunks.append(before)
+
+        parsed = _parse_tool_call_payload(match.group(1))
+        if parsed is not None:
+            tool_name, tool_args = parsed
+            tool_events.append({"type": "tool_call", "name": tool_name, "arguments": tool_args})
+
+        working = working[match.end() :]
+
+
+def safe_eval_arithmetic(expression: str) -> float:
+    allowed_ops: dict[type, Any] = {
+        ast.Add: operator.add,
+        ast.Sub: operator.sub,
+        ast.Mult: operator.mul,
+        ast.Div: operator.truediv,
+        ast.FloorDiv: operator.floordiv,
+        ast.Mod: operator.mod,
+        ast.Pow: operator.pow,
+        ast.USub: operator.neg,
+        ast.UAdd: operator.pos,
+    }
+
+    def _eval(node: ast.AST) -> float:
+        if isinstance(node, ast.Expression):
+            return _eval(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+            return float(node.value)
+        if isinstance(node, ast.UnaryOp) and type(node.op) in allowed_ops:
+            return float(allowed_ops[type(node.op)](_eval(node.operand)))
+        if isinstance(node, ast.BinOp) and type(node.op) in allowed_ops:
+            left = _eval(node.left)
+            right = _eval(node.right)
+            return float(allowed_ops[type(node.op)](left, right))
+        raise ValueError("Expression contains unsupported syntax")
+
+    tree = ast.parse(expression, mode="eval")
+    return _eval(tree)
+
+
+def execute_agent_tool(
+    *,
+    tool_name: str,
+    tool_args: dict[str, Any],
+    messages: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if tool_name == "get_current_time":
+        timezone_name = str(tool_args.get("timezone") or "UTC").strip() or "UTC"
+        try:
+            tz = ZoneInfo(timezone_name)
+        except ZoneInfoNotFoundError:
+            timezone_name = "UTC"
+            tz = timezone.utc
+        now = datetime.now(tz)
+        return {
+            "timezone": timezone_name,
+            "iso": now.isoformat(),
+            "readable": now.strftime("%A, %d %B %Y, %H:%M:%S %Z"),
+        }
+
+    if tool_name == "calculator":
+        expression = str(tool_args.get("expression") or "").strip()
+        if not expression:
+            return {"error": "expression is required"}
+        try:
+            value = safe_eval_arithmetic(expression)
+            return {"expression": expression, "result": value}
+        except Exception as exc:
+            return {"expression": expression, "error": str(exc)}
+
+    if tool_name == "search_conversation":
+        query = str(tool_args.get("query") or "").strip().lower()
+        if not query:
+            return {"error": "query is required"}
+
+        max_results = max(1, min(10, as_int(tool_args.get("max_results") or 3)))
+        scored: list[tuple[int, dict[str, Any]]] = []
+        query_terms = [term for term in re.split(r"\s+", query) if term]
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            text = extract_summary_text(msg.get("content"))
+            normalized = text.lower()
+            if not normalized:
+                continue
+            score = sum(1 for term in query_terms if term in normalized)
+            if score <= 0:
+                continue
+            scored.append(
+                (
+                    score,
+                    {
+                        "role": str(msg.get("role") or ""),
+                        "snippet": compact_text(text, 280),
+                    },
+                )
+            )
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return {
+            "query": query,
+            "matches": [item[1] for item in scored[:max_results]],
+            "count": len(scored),
+        }
+
+    return {"error": f"unknown tool: {tool_name}"}
+
+
+def make_tool_response_message(tool_result: dict[str, Any]) -> dict[str, str]:
+    return {
+        "role": "user",
+        "content": "<tool_response>\n"
+        + json.dumps(tool_result, ensure_ascii=False)
+        + "\n</tool_response>",
+    }
+
+
+async def run_agent_non_stream(
+    *,
+    messages: list[dict[str, Any]],
+    model: str,
+    mode: str | None,
+    temperature: float,
+    max_tokens: int | None,
+) -> str:
+    tool_specs = build_agent_tool_specs()
+    working_messages = inject_tools_into_messages(messages, tool_specs)
+
+    last_visible_text = ""
+    for _ in range(max(1, AGENT_MAX_LLM_CALLS_PER_RUN)):
+        assistant_text = await call_llm_chat(
+            messages=working_messages,
+            model=model,
+            mode=mode,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        tool_calls, visible_text = parse_assistant_tool_calls(assistant_text)
+        if visible_text:
+            last_visible_text = visible_text
+
+        if not tool_calls:
+            return visible_text or assistant_text
+
+        working_messages.append({"role": "assistant", "content": assistant_text})
+
+        calls_to_execute = tool_calls[: max(1, AGENT_MAX_TOOL_CALLS_PER_TURN)]
+        for tool_name, tool_args in calls_to_execute:
+            tool_result = execute_agent_tool(
+                tool_name=tool_name,
+                tool_args=tool_args,
+                messages=working_messages,
+            )
+            wrapped_result = {
+                "tool": tool_name,
+                "arguments": tool_args,
+                "result": tool_result,
+            }
+            working_messages.append(make_tool_response_message(wrapped_result))
+
+    if last_visible_text:
+        return last_visible_text
+    return "I could not finish tool planning within the safety limit."
 
 
 class Attachment(BaseModel):
@@ -135,6 +493,42 @@ def build_health_timeout() -> httpx.Timeout:
         write=5.0,
         pool=5.0,
     )
+
+
+# Rate limiting and attachment abuse guardrails
+_REQUEST_TIMESTAMPS: list[float] = []  # Track per-second request rate
+_MAX_REQUESTS_PER_SECOND = int(os.getenv("AIUI_MAX_REQUESTS_PER_SECOND", "10"))
+_MAX_ATTACHMENT_BYTES_PER_REQUEST = int(os.getenv("AIUI_MAX_ATTACHMENT_BYTES_PER_REQUEST", "25000000"))
+
+
+def check_rate_limit() -> None:
+    """Enforce per-second rate limit to prevent abuse."""
+    now = time.perf_counter()
+    _REQUEST_TIMESTAMPS[:] = [t for t in _REQUEST_TIMESTAMPS if now - t < 1.0]
+    if len(_REQUEST_TIMESTAMPS) >= _MAX_REQUESTS_PER_SECOND:
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    _REQUEST_TIMESTAMPS.append(now)
+
+
+def validate_attachments(attachments: list[Attachment]) -> None:
+    """Enforce attachment size and count guardrails to prevent abuse."""
+    if len(attachments) > MAX_ATTACHMENTS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Too many attachments (max {MAX_ATTACHMENTS}), got {len(attachments)}",
+        )
+    total_bytes = 0
+    for a in attachments:
+        if a.data:
+            try:
+                total_bytes += len(base64.b64decode(a.data))
+            except (binascii.Error, ValueError):
+                pass  # Invalid base64; will be caught elsewhere
+    if total_bytes > _MAX_ATTACHMENT_BYTES_PER_REQUEST:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Attachment payload too large (max {_MAX_ATTACHMENT_BYTES_PER_REQUEST} bytes), got {total_bytes}",
+        )
 
 
 def format_httpx_error(exc: httpx.HTTPError) -> str:
@@ -401,8 +795,12 @@ def extract_document_text(item: Attachment) -> str:
         ):
             return extract_docx_text(raw_bytes)
         if mime_type in {"application/vnd.ms-powerpoint", "application/mspowerpoint"} or suffix == ".ppt":
+            if not ENABLE_EXTERNAL_EXTRACTORS:
+                return ""  # External extractors disabled by default; set AIUI_ENABLE_EXTERNAL_EXTRACTORS=1
             return run_external_document_extractor([["catppt"]], raw_bytes=raw_bytes, suffix=".ppt")
         if suffix == ".doc" or mime_type == "application/msword":
+            if not ENABLE_EXTERNAL_EXTRACTORS:
+                return ""  # External extractors disabled by default; set AIUI_ENABLE_EXTERNAL_EXTRACTORS=1
             return run_external_document_extractor(
                 [["catdoc"], ["antiword"]],
                 raw_bytes=raw_bytes,
@@ -571,6 +969,8 @@ def build_summary_system_prompt(system_prompt: str, context_summary: str) -> str
         cleaned_system_prompt = f"{cleaned_system_prompt}\n{date_line}"
     else:
         cleaned_system_prompt = date_line
+
+    cleaned_system_prompt = f"{cleaned_system_prompt}\n\n{RESPONSE_FORMAT_GUIDANCE}".strip()
 
     if not cleaned_context_summary:
         return cleaned_system_prompt
@@ -992,6 +1392,10 @@ async def modules() -> dict[str, Any]:
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
+    # Apply rate limiting and attachment abuse guardrails
+    check_rate_limit()
+    validate_attachments(req.attachments)
+    
     text = build_user_text(req.message, req.attachments)
     request_images = normalize_image_attachments(req.attachments)
     if not text and not request_images:
@@ -1004,13 +1408,22 @@ async def chat(req: ChatRequest):
 
     if not req.stream:
         try:
-            answer = await call_llm_chat(
-                messages=payload_messages,
-                model=model,
-                mode=upstream_mode,
-                temperature=req.temperature,
-                max_tokens=req.max_tokens,
-            )
+            if AGENT_ENABLE_NON_STREAM_LOOP:
+                answer = await run_agent_non_stream(
+                    messages=payload_messages,
+                    model=model,
+                    mode=upstream_mode,
+                    temperature=req.temperature,
+                    max_tokens=req.max_tokens,
+                )
+            else:
+                answer = await call_llm_chat(
+                    messages=payload_messages,
+                    model=model,
+                    mode=upstream_mode,
+                    temperature=req.temperature,
+                    max_tokens=req.max_tokens,
+                )
         except httpx.HTTPError as exc:
             raise HTTPException(status_code=502, detail=f"Upstream chat failed: {format_httpx_error(exc)}") from exc
         return {"message": {"role": "assistant", "content": answer}}
@@ -1019,34 +1432,91 @@ async def chat(req: ChatRequest):
         usage: dict[str, Any] = {}
         started_at = time.perf_counter()
         streamed_content_parts: list[str] = []
+        tool_specs = build_agent_tool_specs() if AGENT_ENABLE_STREAM_LOOP else []
+        agent_messages = inject_tools_into_messages(payload_messages, tool_specs) if tool_specs else payload_messages
         try:
             yield sse_event({"type": "meta", "model": model})
-            async for upstream_event in stream_llm_chat(
-                messages=payload_messages,
-                model=model,
-                mode=upstream_mode,
-                temperature=req.temperature,
-                max_tokens=req.max_tokens,
-            ):
-                if upstream_event.get("type") == "x-status":
-                    yield sse_event({"type": "status", "text": upstream_event.get("text", "")})
-                    continue
+            max_turns = max(1, AGENT_MAX_LLM_CALLS_PER_RUN if AGENT_ENABLE_STREAM_LOOP else 1)
+            for turn_index in range(max_turns):
+                turn_usage: dict[str, Any] = {}
+                turn_tool_parse_buffer = ""
+                turn_emitted_tool_calls: list[tuple[str, dict[str, Any]]] = []
+                assistant_turn_raw_parts: list[str] = []
 
-                event_usage = upstream_event.get("usage")
-                if isinstance(event_usage, dict):
-                    usage = event_usage
+                async for upstream_event in stream_llm_chat(
+                    messages=agent_messages,
+                    model=model,
+                    mode=upstream_mode,
+                    temperature=req.temperature,
+                    max_tokens=req.max_tokens,
+                ):
+                    if upstream_event.get("type") == "x-status":
+                        yield sse_event({"type": "status", "text": upstream_event.get("text", "")})
+                        continue
 
-                choices = upstream_event.get("choices")
-                if not isinstance(choices, list) or not choices:
-                    continue
+                    event_usage = upstream_event.get("usage")
+                    if isinstance(event_usage, dict):
+                        turn_usage = event_usage
+                        usage = event_usage
 
-                first_choice = choices[0] or {}
-                delta = first_choice.get("delta")
-                if isinstance(delta, dict):
-                    content_delta = delta.get("content")
-                    if isinstance(content_delta, str) and content_delta:
-                        streamed_content_parts.append(content_delta)
-                        yield sse_event({"type": "token", "delta": content_delta})
+                    choices = upstream_event.get("choices")
+                    if not isinstance(choices, list) or not choices:
+                        continue
+
+                    first_choice = choices[0] or {}
+                    delta = first_choice.get("delta")
+                    if isinstance(delta, dict):
+                        content_delta = delta.get("content")
+                        if isinstance(content_delta, str) and content_delta:
+                            assistant_turn_raw_parts.append(content_delta)
+                            turn_tool_parse_buffer += content_delta
+                            visible_chunks, tool_events, turn_tool_parse_buffer = parse_stream_delta_for_tool_events(
+                                turn_tool_parse_buffer
+                            )
+                            for chunk in visible_chunks:
+                                if not chunk:
+                                    continue
+                                streamed_content_parts.append(chunk)
+                                yield sse_event({"type": "token", "delta": chunk})
+                            for tool_event in tool_events:
+                                yield sse_event(tool_event)
+                                name = str(tool_event.get("name") or "")
+                                args = tool_event.get("arguments")
+                                if name and isinstance(args, dict):
+                                    turn_emitted_tool_calls.append((name, args))
+
+                remaining_visible_text = TOOL_CALL_BLOCK_RE.sub("", turn_tool_parse_buffer)
+                if remaining_visible_text:
+                    streamed_content_parts.append(remaining_visible_text)
+                    yield sse_event({"type": "token", "delta": remaining_visible_text})
+
+                assistant_turn_raw = "".join(assistant_turn_raw_parts)
+                parsed_tool_calls, _visible_assistant_text = parse_assistant_tool_calls(assistant_turn_raw)
+
+                if len(parsed_tool_calls) > len(turn_emitted_tool_calls):
+                    for tool_name, tool_args in parsed_tool_calls[len(turn_emitted_tool_calls) :]:
+                        yield sse_event({"type": "tool_call", "name": tool_name, "arguments": tool_args})
+
+                if not AGENT_ENABLE_STREAM_LOOP or not parsed_tool_calls:
+                    break
+
+                agent_messages.append({"role": "assistant", "content": assistant_turn_raw})
+                for tool_name, tool_args in parsed_tool_calls[: max(1, AGENT_MAX_TOOL_CALLS_PER_TURN)]:
+                    tool_result = execute_agent_tool(
+                        tool_name=tool_name,
+                        tool_args=tool_args,
+                        messages=agent_messages,
+                    )
+                    wrapped_result = {
+                        "tool": tool_name,
+                        "arguments": tool_args,
+                        "result": tool_result,
+                    }
+                    agent_messages.append(make_tool_response_message(wrapped_result))
+                    yield sse_event({"type": "tool_result", "name": tool_name, "result": tool_result})
+
+                if turn_index < max_turns - 1:
+                    yield sse_event({"type": "status", "text": "continuing after tool results"})
         except httpx.HTTPError as exc:
             yield sse_event({"type": "error", "error": f"Upstream chat failed: {format_httpx_error(exc)}"})
             yield "data: [DONE]\n\n"
@@ -1064,7 +1534,7 @@ async def chat(req: ChatRequest):
         completion_tokens = as_int(usage.get("completion_tokens"))
         total_tokens = as_int(usage.get("total_tokens"))
         if context_tokens <= 0:
-            context_tokens = estimate_messages_tokens(payload_messages)
+            context_tokens = estimate_messages_tokens(agent_messages)
         if completion_tokens <= 0:
             completion_tokens = estimate_text_tokens("".join(streamed_content_parts))
         if total_tokens <= 0:

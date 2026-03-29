@@ -59,8 +59,7 @@ echo "[5/9] Python tests (pytest)"
 
 echo "[6/9] YAML lint (yamllint)"
 "$ROOT_DIR/.venv/bin/yamllint" -c .yamllint.yml \
-  docker-compose.standalone.yml \
-  infra/docker-compose.orchestrator.yml
+  docker-compose.frontend.yml
 
 echo "[7/9] Dockerfile lint (hadolint)"
 "$ROOT_DIR/.tools/hadolint" Dockerfile

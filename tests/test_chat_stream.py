@@ -160,3 +160,67 @@ def test_chat_stream_allows_document_only_prompt(client, monkeypatch) -> None:
         "role": "user",
         "content": "Attached documents:\n\n[Attached document: brief.txt]\nDocument body.",
     }
+
+
+def test_chat_stream_runs_multi_turn_agent_tool_loop(client, monkeypatch) -> None:
+    calls: list[list[dict[str, object]]] = []
+
+    async def fake_stream_llm_chat(
+        messages: list[dict[str, object]],
+        model: str,
+        mode: str | None,
+        temperature: float,
+        max_tokens: int | None,
+    ):
+        del model, mode, temperature, max_tokens
+        calls.append(messages)
+
+        has_tool_response = any(
+            isinstance(msg, dict)
+            and msg.get("role") == "user"
+            and isinstance(msg.get("content"), str)
+            and "<tool_response>" in str(msg.get("content"))
+            for msg in messages
+        )
+
+        if not has_tool_response:
+            yield {
+                "choices": [
+                    {
+                        "delta": {
+                            "content": (
+                                "<tool_call>{\"name\":\"calculator\","
+                                "\"arguments\":{\"expression\":\"2+2\"}}</tool_call>"
+                            )
+                        }
+                    }
+                ]
+            }
+            return
+
+        yield {"choices": [{"delta": {"content": "The result is 4."}}]}
+
+    monkeypatch.setattr(app_module, "stream_llm_chat", fake_stream_llm_chat)
+    monkeypatch.setattr(app_module, "SYSTEM_PROMPT", "")
+
+    response = client.post(
+        "/chat",
+        json={"message": "What is 2 + 2?", "history": [], "stream": True},
+    )
+
+    assert response.status_code == 200
+    payloads = _decode_sse_payloads(response.text)
+    events = _json_events(payloads)
+
+    tool_call = next(evt for evt in events if evt.get("type") == "tool_call")
+    assert tool_call["name"] == "calculator"
+
+    tool_result = next(evt for evt in events if evt.get("type") == "tool_result")
+    assert tool_result["name"] == "calculator"
+    assert tool_result["result"]["result"] == 4.0
+
+    token_events = [evt for evt in events if evt.get("type") == "token"]
+    assert "".join(str(evt.get("delta", "")) for evt in token_events).strip() == "The result is 4."
+
+    # Two upstream turns should be executed: tool-planning turn + final answer turn.
+    assert len(calls) == 2

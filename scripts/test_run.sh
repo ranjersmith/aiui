@@ -1,4 +1,6 @@
 #!/bin/bash
+# [LEGACY] Legacy test runner variant
+# ⚠️  Deprecated. Use verify_all.sh or run_tests.sh instead.
 
 # Run tests
 cd /workspace

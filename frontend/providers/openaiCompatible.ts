@@ -14,6 +14,15 @@ export const streamOpenAiCompatible: StreamProvider = async ({
     throw new Error("baseUrl is required for openai provider");
   }
 
+  const systemPrompt = String(config.systemPrompt || "").trim();
+  const messages = [
+    ...history.map((msg) => ({ role: msg.role, content: msg.content })),
+    { role: "user", content: userText },
+  ];
+  if (systemPrompt) {
+    messages.unshift({ role: "system", content: systemPrompt });
+  }
+
   const response = await fetch(`${baseUrl}/v1/chat/completions`, {
     method: "POST",
     headers: {
@@ -21,10 +30,7 @@ export const streamOpenAiCompatible: StreamProvider = async ({
     },
     body: JSON.stringify({
       model: config.model,
-      messages: [
-        ...history.map((msg) => ({ role: msg.role, content: msg.content })),
-        { role: "user", content: userText },
-      ],
+      messages,
       stream: true,
       stream_options: { include_usage: true },
       temperature: config.temperature,
@@ -51,6 +57,82 @@ export const streamOpenAiCompatible: StreamProvider = async ({
   const decoder = new TextDecoder();
   let sseBuffer = "";
   let usage: Record<string, unknown> = {};
+  let doneEmitted = false;
+  let sawAnyEvent = false;
+  let emittedAnyToken = false;
+
+  const emitText = (raw: unknown) => {
+    if (typeof raw === "string") {
+      if (raw) {
+        emittedAnyToken = true;
+        handlers.onToken(raw);
+      }
+      return;
+    }
+    if (Array.isArray(raw)) {
+      for (const part of raw) {
+        if (!part || typeof part !== "object") continue;
+        const textPart = (part as Record<string, unknown>).text;
+        if (typeof textPart === "string" && textPart) {
+          emittedAnyToken = true;
+          handlers.onToken(textPart);
+        }
+      }
+    }
+  };
+
+  const consumeEvent = (event: Record<string, unknown>) => {
+    const eventType = String(event.type || "").trim().toLowerCase();
+    if (eventType === "status") {
+      const text = typeof event.text === "string" ? event.text : "";
+      if (text) handlers.onStatus(text);
+      return;
+    }
+    if (eventType === "tool_call") {
+      const toolName = typeof event.name === "string" ? event.name : "tool";
+      handlers.onStatus(`tool call: ${toolName}`);
+      return;
+    }
+    if (eventType === "tool_result") {
+      const toolName = typeof event.name === "string" ? event.name : "tool";
+      handlers.onStatus(`tool result: ${toolName}`);
+      return;
+    }
+
+    if (event.model) {
+      handlers.onMeta(String(event.model));
+    }
+
+    if (event.usage && typeof event.usage === "object") {
+      usage = event.usage as Record<string, unknown>;
+    }
+
+    const choices = Array.isArray(event.choices) ? event.choices : [];
+    const first = choices[0] as Record<string, unknown> | undefined;
+    if (!first) return;
+
+    const delta = (first.delta || {}) as Record<string, unknown>;
+    emitText(delta.content);
+    emitText(delta.reasoning_content);
+
+    const message = (first.message || {}) as Record<string, unknown>;
+    emitText(message.content);
+    emitText(message.reasoning_content);
+
+    const text = first.text;
+    emitText(text);
+  };
+
+  const emitDone = () => {
+    if (doneEmitted) return;
+    doneEmitted = true;
+    const completionTokens = Number(usage.completion_tokens || 0);
+    if (completionTokens > 0) {
+      handlers.onDone(`${completionTokens} tok`);
+    } else {
+      handlers.onDone("done");
+    }
+  };
 
   while (true) {
     const { done, value } = await reader.read();
@@ -58,38 +140,47 @@ export const streamOpenAiCompatible: StreamProvider = async ({
 
     sseBuffer += decoder.decode(value, { stream: true });
     sseBuffer = parseSseBuffer(sseBuffer, (payloadText) => {
-      if (payloadText === "[DONE]") {
-        const completionTokens = Number(usage.completion_tokens || 0);
-        if (completionTokens > 0) {
-          handlers.onDone(`${completionTokens} tok`);
-        } else {
-          handlers.onDone("done");
-        }
+      sawAnyEvent = true;
+      const payload = String(payloadText || "").trim();
+      if (!payload) return;
+      if (payload === "[DONE]") {
+        emitDone();
         return;
       }
 
       let event: Record<string, unknown>;
       try {
-        event = JSON.parse(payloadText);
+        event = JSON.parse(payload);
       } catch {
         return;
       }
 
-      if (event.model) {
-        handlers.onMeta(String(event.model));
-      }
-
-      if (event.usage && typeof event.usage === "object") {
-        usage = event.usage as Record<string, unknown>;
-      }
-
-      const choices = Array.isArray(event.choices) ? event.choices : [];
-      const first = choices[0] as Record<string, unknown> | undefined;
-      const delta = (first?.delta || {}) as Record<string, unknown>;
-      const contentDelta = String(delta.content || "");
-      if (contentDelta) {
-        handlers.onToken(contentDelta);
-      }
+      consumeEvent(event);
     });
+  }
+
+  // Some backends close the stream without emitting [DONE], and some ignore
+  // stream=true and return one JSON payload. Handle both so UI never hangs.
+  if (!doneEmitted) {
+    const tail = sseBuffer.trim();
+    if (tail) {
+      if (tail === "[DONE]") {
+        emitDone();
+      } else {
+        try {
+          const event = JSON.parse(tail) as Record<string, unknown>;
+          consumeEvent(event);
+        } catch {
+          // Ignore non-JSON tail fragment.
+        }
+      }
+    }
+
+    // If we received events but no content and no DONE marker, avoid hanging in
+    // streaming state while still showing a clear completion summary.
+    if (!emittedAnyToken && sawAnyEvent) {
+      handlers.onStatus("completed with empty delta stream");
+    }
+    emitDone();
   }
 };

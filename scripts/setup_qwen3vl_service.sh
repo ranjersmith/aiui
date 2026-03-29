@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# [EXPERIMENTAL] Per-host Qwen3-VL model service setup
+# ⚠️  Not fully integrated into main deployment. Development use only.
 set -euo pipefail
 
 INSTANCE="8082"

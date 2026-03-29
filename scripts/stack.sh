@@ -2,37 +2,32 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ORCH_COMPOSE="$ROOT_DIR/infra/docker-compose.orchestrator.yml"
-STANDALONE_COMPOSE="$ROOT_DIR/infra/docker-compose.standalone.yml"
+# Reference only existing compose files; docker-compose.frontend.yml is the active runtime.
+FRONTEND_COMPOSE="$ROOT_DIR/docker-compose.frontend.yml"
 
-DEFAULT_MODE="orchestrator"
+DEFAULT_MODE="frontend"
 MODE="$DEFAULT_MODE"
 FOLLOW_LOGS="false"
 
 usage() {
   cat <<'USAGE'
 Usage:
-  ./scripts/stack.sh <command> [--standalone] [--orchestrator] [--follow]
+  ./scripts/stack.sh <command> [--follow]
 
 Commands:
-  up         Start stack (build + detached)
-  down       Stop stack
-  restart    Restart stack
+  up         Start frontend (build + detached)
+  down       Stop frontend
+  restart    Restart frontend
   status     Show compose service status
   health     Query UI /health endpoint
   logs       Show compose logs (use --follow for live tail)
   help       Show this message
-
-Modes:
-  --orchestrator (default)
-  --standalone
 
 Examples:
   ./scripts/stack.sh up
   ./scripts/stack.sh status
   ./scripts/stack.sh health
   ./scripts/stack.sh logs --follow
-  ./scripts/stack.sh up --standalone
 USAGE
 }
 
@@ -43,11 +38,8 @@ fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --standalone)
-      MODE="standalone"
-      ;;
-    --orchestrator)
-      MODE="orchestrator"
+    --follow)
+      FOLLOW_LOGS="true"
       ;;
     --follow)
       FOLLOW_LOGS="true"
@@ -61,12 +53,8 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-compose_file="$ORCH_COMPOSE"
-health_url="http://127.0.0.1:${AIUI_ORCH_UI_PORT:-3311}/health"
-if [[ "$MODE" == "standalone" ]]; then
-  compose_file="$STANDALONE_COMPOSE"
-  health_url="http://127.0.0.1:${AIUI_UI_PORT:-3310}/health"
-fi
+compose_file="$FRONTEND_COMPOSE"
+health_url="http://127.0.0.1:3311/health"
 
 if [[ ! -f "$compose_file" ]]; then
   echo "Compose file not found: $compose_file" >&2

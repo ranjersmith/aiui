@@ -1,12 +1,311 @@
 import { createMemo, createSignal } from "solid-js";
 import { render } from "solid-js/web";
 import html from "solid-js/html";
+import createDOMPurify from "dompurify";
+import { unified } from "unified";
+import remarkParse from "remark-parse";
+import remarkMath from "remark-math";
+import remarkRehype from "remark-rehype";
+import rehypeKatex from "rehype-katex";
+import rehypeStringify from "rehype-stringify";
 
 import { readConfig } from "./core/config.mjs";
 import { providerFor } from "./providers";
 import type { ChatMessage, StreamHandlers } from "./core/types";
 
 const MAX_RENDERED_MESSAGES = 120;
+const MAX_MARKDOWN_CACHE_SIZE = 500;
+const STREAM_FLUSH_INTERVAL_MS = 80;
+
+const markdownTokenizer = unified().use(remarkParse).use(remarkMath, {
+  singleDollarTextMath: true,
+});
+const plainMarkdownTokenizer = unified().use(remarkParse);
+const mdastToHast = unified().use(remarkRehype);
+const mathRenderer = unified().use(rehypeKatex, {
+  throwOnError: false,
+  strict: "ignore",
+});
+const hastStringifier = unified().use(rehypeStringify);
+
+const domPurify = typeof window !== "undefined" ? createDOMPurify(window) : null;
+type RenderFallbackReason = "malformed-math-delimiters" | "pipeline-error";
+
+type RenderedMarkdown = {
+  html: string;
+  fallbackReason: RenderFallbackReason | null;
+  trace: RenderTrace;
+};
+
+type RenderTrace = {
+  raw: string;
+  normalized: string;
+  finalHtml: string;
+  malformedMathDelimiters: boolean;
+  fallbackReason: RenderFallbackReason | null;
+  updatedAt: string;
+};
+
+type StreamingPreview = {
+  html: string;
+  isBuffered: boolean;
+  trace: RenderTrace;
+};
+
+type NotationDiagnostics = {
+  source: "streaming" | "final" | "error";
+  sample: string;
+  renderMode: "streaming-preview" | "final-math" | "final-plain-fallback" | "error-plain";
+  fallbackReason: RenderFallbackReason | null;
+  malformedMathDelimiters: boolean;
+  latexCommandCount: number;
+  inlineMathSegments: number;
+  displayMathSegments: number;
+  scientificNotationCount: number;
+  unicodeMathSymbolCount: number;
+  updatedAt: string;
+};
+
+const markdownHtmlCache = new Map<string, RenderedMarkdown>();
+
+function normalizeEscapedMathDelimiters(text: string): string {
+  const codeFences: string[] = [];
+  const withoutCodeFences = text.replace(/```[\s\S]*?```/g, (block) => {
+    const token = `@@AIUI_CODE_FENCE_${codeFences.length}@@`;
+    codeFences.push(block);
+    return token;
+  });
+
+  const normalized = withoutCodeFences
+    // Convert LaTeX-style delimiters used by many models to dollar delimiters
+    // expected by remark-math.
+    .replace(/\\\[([\s\S]+?)\\\]/g, (_match, inner: string) => `$$${inner}$$`)
+    .replace(/\\\((.+?)\\\)/g, (_match, inner: string) => `$${inner}$`)
+    .replace(/\\\$\\\$([\s\S]+?)\\\$\\\$/g, (_match, inner: string) => `$$${inner}$$`)
+    .replace(/\\\$(.+?)\\\$/g, (match, inner: string) => {
+      const looksMath = /[A-Za-z\\^_{}=+\-*/]/.test(inner);
+      return looksMath ? `$${inner}$` : match;
+    });
+
+  return normalized.replace(/@@AIUI_CODE_FENCE_(\d+)@@/g, (_token, index: string) => {
+    const i = Number(index);
+    return Number.isInteger(i) && codeFences[i] ? codeFences[i] : "";
+  });
+}
+
+function preprocessRawText(content: string): string {
+  const normalizedNewlines = String(content || "").replace(/\r\n?/g, "\n");
+  return normalizeEscapedMathDelimiters(normalizedNewlines);
+}
+
+function hasMalformedMathDelimiters(text: string): boolean {
+  // Hide fenced code blocks from delimiter checks.
+  const withoutCodeFences = text.replace(/```[\s\S]*?```/g, "");
+
+  const displayCount = (withoutCodeFences.match(/(?<!\\)\$\$/g) || []).length;
+  if (displayCount % 2 !== 0) return true;
+
+  const maskedDisplay = withoutCodeFences.replace(/(?<!\\)\$\$[\s\S]*?(?<!\\)\$\$/g, "");
+  const inlineCount = (maskedDisplay.match(/(?<!\\)(?<!\$)\$(?!\$)/g) || []).length;
+  if (inlineCount % 2 !== 0) return true;
+
+  return false;
+}
+
+function sanitizeHtml(fragment: string): string {
+  return domPurify ? domPurify.sanitize(fragment) : fragment;
+}
+
+function buildRenderTrace(
+  raw: string,
+  normalized: string,
+  finalHtml: string,
+  fallbackReason: RenderFallbackReason | null
+): RenderTrace {
+  return {
+    raw,
+    normalized,
+    finalHtml,
+    malformedMathDelimiters: hasMalformedMathDelimiters(normalized),
+    fallbackReason,
+    updatedAt: new Date().toLocaleTimeString(),
+  };
+}
+
+function renderMarkdownWithMath(raw: string): string {
+  // Pipeline stage: raw text -> markdown tokenizer -> markdown AST (mdast)
+  const mdast = markdownTokenizer.parse(raw);
+
+  // Pipeline stage: mdast -> hast (HTML AST)
+  const hast = mdastToHast.runSync(mdast);
+
+  // Pipeline stage: KaTeX render on math nodes inside hast
+  const hastWithMath = mathRenderer.runSync(hast);
+
+  // Pipeline stage: hast -> HTML string
+  return String(hastStringifier.stringify(hastWithMath));
+}
+
+function renderMarkdownPlain(raw: string): string {
+  const mdast = plainMarkdownTokenizer.parse(raw);
+  const hast = mdastToHast.runSync(mdast);
+  return String(hastStringifier.stringify(hast));
+}
+
+function renderMarkdownFromPipeline(content: string): RenderedMarkdown {
+  const raw = String(content || "");
+  const normalized = preprocessRawText(raw);
+  const malformedMathDelimiters = hasMalformedMathDelimiters(normalized);
+
+  // Delimiter-driven rendering: when delimiters are malformed, skip math parsing
+  // and render plain markdown without mutating source content.
+  if (malformedMathDelimiters) {
+    const html = sanitizeHtml(renderMarkdownPlain(normalized));
+    return {
+      html,
+      fallbackReason: "malformed-math-delimiters",
+      trace: buildRenderTrace(raw, normalized, html, "malformed-math-delimiters"),
+    };
+  }
+
+  try {
+    const html = sanitizeHtml(renderMarkdownWithMath(normalized));
+    return {
+      html,
+      fallbackReason: null,
+      trace: buildRenderTrace(raw, normalized, html, null),
+    };
+  } catch {
+    const html = sanitizeHtml(renderMarkdownPlain(normalized));
+    return {
+      html,
+      fallbackReason: "pipeline-error",
+      trace: buildRenderTrace(raw, normalized, html, "pipeline-error"),
+    };
+  }
+}
+
+function resolveRenderMode(source: NotationDiagnostics["source"], fallbackReason: RenderFallbackReason | null): NotationDiagnostics["renderMode"] {
+  if (source === "streaming") return "streaming-preview";
+  if (source === "error") return "error-plain";
+  if (fallbackReason) return "final-plain-fallback";
+  return "final-math";
+}
+
+function logNotationDiagnostics(diag: NotationDiagnostics): void {
+  const payload = {
+    source: diag.source,
+    renderMode: diag.renderMode,
+    fallbackReason: diag.fallbackReason,
+    malformedMathDelimiters: diag.malformedMathDelimiters,
+    latexCommandCount: diag.latexCommandCount,
+    inlineMathSegments: diag.inlineMathSegments,
+    displayMathSegments: diag.displayMathSegments,
+    scientificNotationCount: diag.scientificNotationCount,
+    unicodeMathSymbolCount: diag.unicodeMathSymbolCount,
+    sample: diag.sample,
+  };
+  console.debug("[aiui][notation-monitor]", payload);
+}
+
+function logRenderTrace(trace: RenderTrace): void {
+  console.debug("[aiui][render-trace]", {
+    fallbackReason: trace.fallbackReason,
+    malformedMathDelimiters: trace.malformedMathDelimiters,
+    raw: trace.raw,
+    normalized: trace.normalized,
+    finalHtml: trace.finalHtml,
+  });
+}
+
+function renderMessageMarkdown(content: string): RenderedMarkdown {
+  const source = String(content || "");
+  const cached = markdownHtmlCache.get(source);
+  if (cached) return cached;
+
+  let rendered: RenderedMarkdown = {
+    html: "",
+    fallbackReason: null,
+    trace: buildRenderTrace(source, preprocessRawText(source), "", null),
+  };
+  try {
+    rendered = renderMarkdownFromPipeline(source);
+  } catch {
+    const html = sanitizeHtml(source);
+    rendered = {
+      html,
+      fallbackReason: "pipeline-error",
+      trace: buildRenderTrace(source, preprocessRawText(source), html, "pipeline-error"),
+    };
+  }
+
+  if (markdownHtmlCache.size >= MAX_MARKDOWN_CACHE_SIZE) {
+    markdownHtmlCache.clear();
+  }
+  markdownHtmlCache.set(source, rendered);
+  return rendered;
+}
+
+function renderStreamingPreview(content: string, previousHtml: string): StreamingPreview {
+  const rendered = renderMessageMarkdown(content);
+
+  if (!rendered.trace.malformedMathDelimiters) {
+    return {
+      html: rendered.html,
+      isBuffered: false,
+      trace: rendered.trace,
+    };
+  }
+
+  const normalized = preprocessRawText(content);
+
+  try {
+    const html = sanitizeHtml(renderMarkdownPlain(normalized));
+    return {
+      html,
+      isBuffered: Boolean(previousHtml),
+      trace: buildRenderTrace(String(content || ""), normalized, html, "malformed-math-delimiters"),
+    };
+  } catch {
+    const html = sanitizeHtml(normalized);
+    return {
+      html,
+      isBuffered: false,
+      trace: buildRenderTrace(String(content || ""), normalized, html, "pipeline-error"),
+    };
+  }
+}
+
+function buildNotationDiagnostics(
+  content: string,
+  source: NotationDiagnostics["source"],
+  fallbackReason: RenderFallbackReason | null
+): NotationDiagnostics {
+  const raw = preprocessRawText(content);
+  const sample = raw.replace(/\s+/g, " ").trim().slice(0, 160);
+
+  const latexCommandCount = (raw.match(/\\[A-Za-z]+\b/g) || []).length;
+  const inlineMathSegments = (raw.match(/(?<!\\)(?<!\$)\$([^$\n]{1,500})\$(?!\$)/g) || []).length;
+  const displayMathSegments = (raw.match(/(?<!\\)\$\$([\s\S]{1,2000}?)(?<!\\)\$\$/g) || []).length;
+  const scientificNotationCount =
+    (raw.match(/\b\d+(?:\.\d+)?e[+-]?\d+\b/gi) || []).length +
+    (raw.match(/\b10\^\{?-?\d+\}?\b/g) || []).length;
+  const unicodeMathSymbolCount = (raw.match(/[±×÷≈≠≤≥∞∑∫√∆∂πμσλθΩωα-ωΑ-Ω]/g) || []).length;
+
+  return {
+    source,
+    sample,
+    renderMode: resolveRenderMode(source, fallbackReason),
+    fallbackReason,
+    malformedMathDelimiters: hasMalformedMathDelimiters(raw),
+    latexCommandCount,
+    inlineMathSegments,
+    displayMathSegments,
+    scientificNotationCount,
+    unicodeMathSymbolCount,
+    updatedAt: new Date().toLocaleTimeString(),
+  };
+}
 
 function App() {
   const config = createMemo(readConfig);
@@ -20,10 +319,14 @@ function App() {
   const [tokenCount, setTokenCount] = createSignal(0);
   const [tokensPerSecond, setTokensPerSecond] = createSignal(0);
   const [totalElapsedMs, setTotalElapsedMs] = createSignal<number | null>(null);
+  const [notationDiagnostics, setNotationDiagnostics] = createSignal<NotationDiagnostics | null>(null);
+  const [streamingPreview, setStreamingPreview] = createSignal<StreamingPreview | null>(null);
+  const [renderTrace, setRenderTrace] = createSignal<RenderTrace | null>(null);
 
   let currentAbort: AbortController | null = null;
   let pendingDelta = "";
-  let flushAnimationFrame: number | null = null;
+  let flushTimer: number | null = null;
+  let lastMonitorLogAtMs = 0;
   let streamStartedAtMs = 0;
   let hasSeenFirstToken = false;
   let flushCountCurrentSecond = 0;
@@ -45,18 +348,25 @@ function App() {
     });
   }
 
+  function assistantTailTextWithPending(): string {
+    const all = messages();
+    const last = all[all.length - 1];
+    const committed = last?.role === "assistant" ? last.content : "";
+    return `${committed}${pendingDelta}`;
+  }
+
   function scheduleFlush() {
-    if (flushAnimationFrame !== null) return;
-    flushAnimationFrame = window.requestAnimationFrame(() => {
-      flushAnimationFrame = null;
+    if (flushTimer !== null) return;
+    flushTimer = window.setTimeout(() => {
+      flushTimer = null;
       flushPendingDelta();
-    });
+    }, STREAM_FLUSH_INTERVAL_MS);
   }
 
   function cancelScheduledFlush() {
-    if (flushAnimationFrame !== null) {
-      window.cancelAnimationFrame(flushAnimationFrame);
-      flushAnimationFrame = null;
+    if (flushTimer !== null) {
+      window.clearTimeout(flushTimer);
+      flushTimer = null;
     }
   }
 
@@ -93,6 +403,7 @@ function App() {
     setTokenCount(0);
     setTokensPerSecond(0);
     setTotalElapsedMs(null);
+    setStreamingPreview(null);
     startFlushRateMeter();
 
     const abortController = new AbortController();
@@ -113,20 +424,49 @@ function App() {
         const rate = Math.round((tokenCount() * 1000) / Math.max(elapsedMs, 1));
         setTokensPerSecond(rate);
         pendingDelta += delta;
+        const preview = renderStreamingPreview(assistantTailTextWithPending(), streamingPreview()?.html || "");
+        setStreamingPreview(preview);
+        setRenderTrace(preview.trace);
+        const diag = buildNotationDiagnostics(assistantTailTextWithPending(), "streaming", null);
+        setNotationDiagnostics(diag);
+        const now = performance.now();
+        if (now - lastMonitorLogAtMs >= 750) {
+          logNotationDiagnostics(diag);
+          logRenderTrace(preview.trace);
+          lastMonitorLogAtMs = now;
+        }
         scheduleFlush();
       },
       onDone: (summary) => {
         cancelScheduledFlush();
         flushPendingDelta();
+        const finalRendered = renderMessageMarkdown(assistantTailTextWithPending());
+        setStreamingPreview(null);
+        setRenderTrace(finalRendered.trace);
+        const diag = buildNotationDiagnostics(assistantTailTextWithPending(), "final", finalRendered.fallbackReason);
+        setNotationDiagnostics(diag);
+        logNotationDiagnostics(diag);
+        logRenderTrace(finalRendered.trace);
         const elapsedMs = Math.round(performance.now() - streamStartedAtMs);
         setTotalElapsedMs(elapsedMs);
         const finalRate = Math.round((tokenCount() * 1000) / Math.max(elapsedMs, 1));
         setTokensPerSecond(finalRate);
-        setStatus(summary ? `done | ${summary}` : "done");
+        if (summary && summary !== "done") {
+          setStatus(`done | ${summary}`);
+        } else {
+          setStatus("done");
+        }
       },
       onError: (errorText) => {
         cancelScheduledFlush();
         flushPendingDelta();
+        setStreamingPreview(null);
+        const errored = renderMessageMarkdown(assistantTailTextWithPending());
+        setRenderTrace(errored.trace);
+        const diag = buildNotationDiagnostics(assistantTailTextWithPending(), "error", "pipeline-error");
+        setNotationDiagnostics(diag);
+        logNotationDiagnostics(diag);
+        logRenderTrace(errored.trace);
         const elapsedMs = Math.round(performance.now() - streamStartedAtMs);
         setTotalElapsedMs(elapsedMs);
         setStatus(`error: ${errorText}`);
@@ -190,15 +530,30 @@ function App() {
 
   const hiddenMessageCount = () => Math.max(0, messages().length - MAX_RENDERED_MESSAGES);
 
-  const messageList = () =>
-    visibleMessages().map((msg) =>
-      html`<article class=${`msg ${msg.role}`}>
-        <div class="msg-meta">${msg.role === "assistant" ? "aiui" : "user"}</div>
-        <div class="msg-content">
-          <div class="md-plain">${msg.content}</div>
+  const messageList = () => {
+    const visible = visibleMessages();
+    const lastIndex = visible.length - 1;
+
+    return visible.map((msg, index) => {
+      const isStreamingAssistantTail = isStreaming() && msg.role === "assistant" && index === lastIndex;
+      const rendered = isStreamingAssistantTail
+        ? streamingPreview() || renderStreamingPreview(msg.content, "")
+        : renderMessageMarkdown(msg.content);
+
+      return html`<article class=${`msg ${msg.role}`}>
+        <div class="msg-meta">
+          ${msg.role === "assistant" ? "aiui" : "user"}
+          ${isStreamingAssistantTail
+            ? html`<span class="render-debug-badge">${() =>
+                streamingPreview()?.isBuffered ? "streaming: buffering math" : "streaming: live preview"}</span>`
+            : null}
         </div>
-      </article>`
-    );
+        <div class="msg-content">
+          <div class="md-rendered" innerHTML=${rendered.html}></div>
+        </div>
+      </article>`;
+    });
+  };
 
   return html`<div class="aiui-shell">
     <div class="panel app-layout">
@@ -217,6 +572,64 @@ function App() {
             elapsed: ${() => (totalElapsedMs() === null ? "-" : `${totalElapsedMs()} ms`)}
           </div>
           <div class="muted">flushes/s: ${flushesPerSecond}</div>
+          <!-- Debug monitor UI hidden by default; enable with ?debug=1 URL param -->
+          ${() => {
+            // Notation diagnostics debug monitor (development only)
+            const debug = new URLSearchParams(location.search).get("debug") === "1";
+            if (!debug) return null;
+            
+            const diag = notationDiagnostics();
+            if (!diag) return null;
+
+            return html`<div class="monitor-card">
+              <div class="monitor-title">notation monitor (${diag.source})</div>
+              <div class="monitor-grid">
+                <div class="monitor-row">latex commands: ${diag.latexCommandCount}</div>
+                <div class="monitor-row">inline math segments: ${diag.inlineMathSegments}</div>
+                <div class="monitor-row">display math segments: ${diag.displayMathSegments}</div>
+                <div class="monitor-row">render mode: ${diag.renderMode}</div>
+                <div class="monitor-row">fallback reason: ${diag.fallbackReason || "none"}</div>
+                <div class="monitor-row">scientific notation: ${diag.scientificNotationCount}</div>
+                <div class="monitor-row">unicode math symbols: ${diag.unicodeMathSymbolCount}</div>
+                <div class=${`monitor-row ${diag.malformedMathDelimiters ? "warn" : "ok"}`}>
+                  delimiters: ${diag.malformedMathDelimiters ? "malformed" : "balanced"}
+                </div>
+                <div class="monitor-row">updated: ${diag.updatedAt}</div>
+              </div>
+              <div class="monitor-sample">${diag.sample || "(empty)"}</div>
+            </div>`;
+          }}
+          ${() => {
+            // Render trace debug monitor (development only)
+            const debug = new URLSearchParams(location.search).get("debug") === "1";
+            if (!debug) return null;
+            
+            const trace = renderTrace();
+            if (!trace) return null;
+
+            return html`<div class="monitor-card">
+              <div class="monitor-title">render trace</div>
+              <div class="monitor-grid">
+                <div class=${`monitor-row ${trace.malformedMathDelimiters ? "warn" : "ok"}`}>
+                  normalized delimiters: ${trace.malformedMathDelimiters ? "malformed" : "balanced"}
+                </div>
+                <div class="monitor-row">fallback: ${trace.fallbackReason || "none"}</div>
+                <div class="monitor-row">updated: ${trace.updatedAt}</div>
+              </div>
+              <details>
+                <summary>raw output</summary>
+                <pre class="monitor-sample">${trace.raw || "(empty)"}</pre>
+              </details>
+              <details>
+                <summary>normalized output</summary>
+                <pre class="monitor-sample">${trace.normalized || "(empty)"}</pre>
+              </details>
+              <details>
+                <summary>rendered html</summary>
+                <pre class="monitor-sample">${trace.finalHtml || "(empty)"}</pre>
+              </details>
+            </div>`;
+          }}
         </div>
         <div class="chat-list" aria-hidden="true"></div>
         <div class="sidebar-footer">

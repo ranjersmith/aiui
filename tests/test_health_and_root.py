@@ -3,10 +3,12 @@ from __future__ import annotations
 import app as app_module
 
 
-def test_root_serves_index_with_no_cache_header(client) -> None:
+def test_root_returns_hint_with_no_cache_header(client) -> None:
     response = client.get("/")
     assert response.status_code == 200
-    assert "<!doctype html>" in response.text.lower()
+    body = response.json()
+    assert body["status"] == "ok"
+    assert "3311" in body.get("hint", "")
     assert "no-store" in response.headers.get("cache-control", "")
 
 

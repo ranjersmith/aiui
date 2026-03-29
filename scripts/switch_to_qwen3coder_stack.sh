@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# [EXPERIMENTAL] Model/stack switcher for Qwen coder models
+# ⚠️  Development utility for switching between LLM configurations. Not for production.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

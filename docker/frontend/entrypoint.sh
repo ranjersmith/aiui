@@ -5,19 +5,26 @@ js_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
-provider_escaped="$(js_escape "${LLM_UI_PROVIDER:-aiui-proxy}")"
-base_url_escaped="$(js_escape "${LLM_UI_BASE_URL:-/llm}")"
-model_escaped="$(js_escape "${LLM_UI_MODEL:-Qwen/Qwen3-VL-8B-Instruct}")"
+provider="${LLM_UI_PROVIDER:-openai}"
+default_base_url=""
+if [ "$provider" = "openai" ]; then
+  default_base_url="http://localhost:8081"
+fi
 
-cat > /usr/share/nginx/html/static/runtime-config.js <<EOF
+provider_escaped="$(js_escape "$provider")"
+base_url_escaped="$(js_escape "${LLM_UI_BASE_URL:-$default_base_url}")"
+model_escaped="$(js_escape "${LLM_UI_MODEL:-Qwen/Qwen3-VL-8B-Instruct}")"
+system_prompt_escaped="$(js_escape "${LLM_UI_SYSTEM_PROMPT:-}")"
+
+cat > /app/static/runtime-config.js <<EOF
 window.__LLM_UI_CONFIG__ = {
   provider: "${provider_escaped}",
   baseUrl: "${base_url_escaped}",
   model: "${model_escaped}",
-  temperature: ${LLM_UI_TEMPERATURE:-0.7},
-  maxTokens: ${LLM_UI_MAX_TOKENS:-512}
+  temperature: ${LLM_UI_TEMPERATURE:-0.3},
+  maxTokens: ${LLM_UI_MAX_TOKENS:-4096},
+  systemPrompt: "${system_prompt_escaped}"
 };
 EOF
 
-envsubst '${NGINX_PORT} ${LLM_UI_PROXY_TARGET} ${LLM_UI_PROXY_AUTH_HEADER}' < /etc/nginx/templates/default.conf.template > /etc/nginx/conf.d/default.conf
-exec nginx -g 'daemon off;'
+exec node /app/static-server.mjs

@@ -16,6 +16,7 @@
     "eval:ab:auto": "./scripts/ab_eval_auto.sh",
     "eval:frontdoor": "python3 ./scripts/eval_frontdoor.py",
     "build:frontend": "node ./scripts/build_frontend.mjs",
+    "monitor:math": "node ./scripts/monitor_math_output.mjs",
     "test:frontend": "tsx --test ./frontend-tests/*.test.mjs",
     "lint:css": "stylelint \"static/**/*.css\" --ignore-pattern \"static/vendor/**/*.css\"",
     "lint:html": "htmlhint \"static/**/*.html\"",
@@ -26,7 +27,17 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "solid-js": "^1.9.9"
+    "dompurify": "^3.2.6",
+    "katex": "^0.16.44",
+    "marked": "^15.0.12",
+    "marked-katex-extension": "^5.1.5",
+    "rehype-katex": "^7.0.1",
+    "rehype-stringify": "^10.0.1",
+    "remark-math": "^6.0.0",
+    "remark-parse": "^11.0.0",
+    "remark-rehype": "^11.1.2",
+    "solid-js": "^1.9.9",
+    "unified": "^11.0.5"
   },
   "devDependencies": {
     "esbuild": "^0.25.9",

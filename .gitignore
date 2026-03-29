@@ -22,3 +22,6 @@ eval_runs/
 .env
 .env.*
 !.env.example
+
+# Generated at runtime (must not be versioned)
+static/runtime-config.js
