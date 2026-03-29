@@ -534,8 +534,13 @@ function App() {
         <div class="msg-meta">
           ${msg.role === "assistant" ? "aiui" : "user"}
           ${isStreamingAssistantTail
-            ? html`<span class="render-debug-badge">${() =>
-                streamingPreview()?.isBuffered ? "streaming: buffering math" : "streaming: live preview"}</span>`
+            ? html`<span class="render-debug-badge">${() => {
+                const ttft = firstTokenLatencyMs() ?? 0;
+                const toks = tokenCount();
+                const rate = tokensPerSecond().toFixed(1);
+                const elapsed = totalElapsedMs() ?? 0;
+                return `⏱ ${ttft}ms • ${toks}t • ${rate}t/s • ${elapsed}ms`;
+              }}</span>`
             : null}
         </div>
         <div class="msg-content">
