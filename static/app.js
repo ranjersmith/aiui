@@ -334,7 +334,7 @@ ${i.textContent}
       <aside class="sidebar">
         <div class="sidebar-header">
           <div class="brand">aiui</div>
-          <div class="muted">${c}</div>
+          <div class="muted">${p}</div>
           <!-- Debug monitor UI hidden by default; enable with ?debug=1 URL param -->
           ${()=>{if(!(new URLSearchParams(location.search).get("debug")==="1"))return null;let ee=P();return ee?_t`<div class="monitor-card">
               <div class="monitor-title">notation monitor (${ee.source})</div>

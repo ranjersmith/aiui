@@ -634,7 +634,7 @@ function App() {
       <aside class="sidebar">
         <div class="sidebar-header">
           <div class="brand">aiui</div>
-          <div class="muted">${status}</div>
+          <div class="muted">${activeModel}</div>
           <!-- Debug monitor UI hidden by default; enable with ?debug=1 URL param -->
           ${() => {
             // Notation diagnostics debug monitor (development only)
