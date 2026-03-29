@@ -435,7 +435,7 @@ ${i.textContent}
               autocomplete="off"
               autocapitalize="off"
               autocorrect="off"
-              spellcheck="false"
+              spellcheck="true"
               onInput=${te=>{let re=te.currentTarget;i(re.value)}}
               onKeyDown=${te=>{te.key==="Enter"&&!te.shiftKey&&(te.preventDefault(),Pe())}}
               disabled=${s}

@@ -835,7 +835,7 @@ function App() {
               autocomplete="off"
               autocapitalize="off"
               autocorrect="off"
-              spellcheck="false"
+              spellcheck="true"
               onInput=${(event: InputEvent) => {
                 const target = event.currentTarget as HTMLTextAreaElement;
                 setInput(target.value);
