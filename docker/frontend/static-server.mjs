@@ -1,14 +1,20 @@
 /**
  * Minimal static file server replacing nginx for the aiui frontend.
  * Files live at /app/static/; browser paths use the /static/ prefix.
+ * Proxies /llm/* to the LLM server (http://qwen3vl-rocm:8000 by default).
  * Reads PORT env (default 8080).
  */
 import { createServer } from "node:http";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { readFile } from "node:fs/promises";
 import { extname, join, resolve } from "node:path";
 
 const PORT = parseInt(process.env.PORT || "8080", 10);
 const ROOT = resolve("/app/static");
+const LLM_BACKEND = process.env.LLM_BACKEND_URL || "http://qwen3vl-rocm:8000";
+
+console.log(`[aiui] using LLM backend: ${LLM_BACKEND}`);
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -52,6 +58,51 @@ const server = createServer(async (req, res) => {
   } catch {
     res.writeHead(400, { "Content-Type": "text/plain" });
     res.end("Bad Request");
+    return;
+  }
+
+  // Proxy /llm/* requests to the LLM backend
+  if (pathname.startsWith("/llm/")) {
+    const backendPath = pathname.slice("/llm".length); // Strip /llm prefix
+    const queryString = req.url.includes("?") ? "?" + req.url.split("?")[1] : "";
+    const fullBackendUrl = `${LLM_BACKEND}${backendPath}${queryString}`;
+    const backendUrl = new URL(fullBackendUrl);
+    
+    const requestor = backendUrl.protocol === "https:" ? httpsRequest : httpRequest;
+    
+    const proxyReq = requestor({
+      hostname: backendUrl.hostname,
+      port: backendUrl.port,
+      path: backendUrl.pathname + (backendUrl.search || ""),
+      method: req.method,
+      headers: {
+        ...req.headers,
+        host: backendUrl.host,
+      },
+    }, (proxyRes) => {
+      res.writeHead(proxyRes.statusCode || 200, {
+        ...Object.fromEntries(
+          Object.entries(proxyRes.headers).filter(([k]) => 
+            !["connection", "transfer-encoding"].includes(k.toLowerCase())
+          )
+        ),
+        ...SECURITY_HEADERS,
+      });
+      proxyRes.pipe(res);
+    });
+
+    proxyReq.on("error", (err) => {
+      console.error("[proxy] failed to reach", fullBackendUrl, ":", err.message);
+      res.writeHead(502, { "Content-Type": "text/plain", ...SECURITY_HEADERS });
+      res.end(`Bad Gateway: Failed to reach LLM server: ${err.message}`);
+    });
+
+    req.on("error", (err) => {
+      console.error("[proxy] client error:", err.message);
+      proxyReq.destroy();
+    });
+
+    req.pipe(proxyReq);
     return;
   }
 
