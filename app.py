@@ -31,15 +31,35 @@ from pydantic import BaseModel, Field
 
 BASE_DIR = Path(__file__).resolve().parent
 
+
+def env_bool(key: str, default: bool = False) -> bool:
+    """Parse env var as boolean: '1', 'true', 'yes' → True, everything else → False."""
+    return os.getenv(key, "").strip().lower() in {"1", "true", "yes"}
+
+
+def env_int(key: str, default: int) -> int:
+    """Parse env var as int with fallback."""
+    try:
+        return int(os.getenv(key, str(default)))
+    except (ValueError, TypeError):
+        return default
+
+
+def env_float(key: str, default: float) -> float:
+    """Parse env var as float with fallback."""
+    try:
+        return float(os.getenv(key, str(default)))
+    except (ValueError, TypeError):
+        return default
+
+
 LLM_BASE_URL = os.getenv("AIUI_LLM_BASE_URL", "http://host.docker.internal:8081").rstrip("/")
 FAST_LLM_BASE_URL = os.getenv("AIUI_FAST_LLM_BASE_URL", "http://host.docker.internal:8082").rstrip("/")
 DEFAULT_MODEL = os.getenv("AIUI_DEFAULT_MODEL", "Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf")
 REQUEST_TIMEOUT_SECONDS = int(os.getenv("AIUI_REQUEST_TIMEOUT_SECONDS", "120"))
 SYSTEM_PROMPT = os.getenv("AIUI_SYSTEM_PROMPT", "You are a concise, helpful assistant.").strip()
-# CANONICAL MATH DELIMITER CONTRACT (enforced across app.py and app.ts):
-# - Inline math: \(...\) — KaTeX-compatible, never use single $
-# - Display math: $$...$$ — multiline equations
-# - All delimiters must be balanced and closed
+# CANONICAL MATH DELIMITER CONTRACT: See MATH_DELIMITERS_CONTRACT.json for the contract.
+# Backend guidance: Use \(...\) for inline math, $$...$$ for display math.
 RESPONSE_FORMAT_GUIDANCE = (
     "Response format requirements:\n"
     "- Return valid Markdown.\n"
@@ -56,37 +76,25 @@ RESPONSE_FORMAT_GUIDANCE = (
     "- Close all formatting markers: **, _, and code fences."
 )
 DEFAULT_API_KEY = os.getenv("AIUI_OPENAI_API_KEY", "").strip()
-UPSTREAM_HEALTH_TIMEOUT_SECONDS = float(os.getenv("AIUI_UPSTREAM_HEALTH_TIMEOUT_SECONDS", "8"))
-CONTEXT_BUDGET_TOKENS = int(os.getenv("AIUI_CONTEXT_BUDGET_TOKENS", "4096"))
-CONTEXT_REPLY_RESERVE_TOKENS = int(os.getenv("AIUI_CONTEXT_REPLY_RESERVE_TOKENS", "1024"))
-MODULE_CATALOG_CACHE_TTL_SECONDS = float(os.getenv("AIUI_MODULE_CATALOG_CACHE_TTL_SECONDS", "60"))
-AGENT_MAX_LLM_CALLS_PER_RUN = int(os.getenv("AIUI_AGENT_MAX_LLM_CALLS_PER_RUN", "6"))
-AGENT_MAX_TOOL_CALLS_PER_TURN = int(os.getenv("AIUI_AGENT_MAX_TOOL_CALLS_PER_TURN", "4"))
-AGENT_ENABLE_NON_STREAM_LOOP = os.getenv("AIUI_AGENT_ENABLE_NON_STREAM_LOOP", "1").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-}
-AGENT_ENABLE_STREAM_LOOP = os.getenv("AIUI_AGENT_ENABLE_STREAM_LOOP", "1").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-}
+UPSTREAM_HEALTH_TIMEOUT_SECONDS = env_float("AIUI_UPSTREAM_HEALTH_TIMEOUT_SECONDS", 8.0)
+CONTEXT_BUDGET_TOKENS = env_int("AIUI_CONTEXT_BUDGET_TOKENS", 4096)
+CONTEXT_REPLY_RESERVE_TOKENS = env_int("AIUI_CONTEXT_REPLY_RESERVE_TOKENS", 1024)
+MODULE_CATALOG_CACHE_TTL_SECONDS = env_float("AIUI_MODULE_CATALOG_CACHE_TTL_SECONDS", 60.0)
+AGENT_MAX_LLM_CALLS_PER_RUN = env_int("AIUI_AGENT_MAX_LLM_CALLS_PER_RUN", 6)
+AGENT_MAX_TOOL_CALLS_PER_TURN = env_int("AIUI_AGENT_MAX_TOOL_CALLS_PER_TURN", 4)
+AGENT_ENABLE_NON_STREAM_LOOP = env_bool("AIUI_AGENT_ENABLE_NON_STREAM_LOOP", True)
+AGENT_ENABLE_STREAM_LOOP = env_bool("AIUI_AGENT_ENABLE_STREAM_LOOP", True)
 # SECURITY: Disable doc/ppt external extractors by default to avoid unexpected process spawning.
 # Set AIUI_ENABLE_EXTERNAL_EXTRACTORS=1 to enable catppt, catdoc, antiword extraction.
-ENABLE_EXTERNAL_EXTRACTORS = os.getenv("AIUI_ENABLE_EXTERNAL_EXTRACTORS", "").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-}
-MAX_ATTACHMENTS = int(os.getenv("AIUI_MAX_ATTACHMENTS", os.getenv("AIUI_MAX_IMAGE_ATTACHMENTS", "4")))
-MAX_ATTACHMENT_DATA_URL_CHARS = int(
-    os.getenv("AIUI_MAX_ATTACHMENT_DATA_URL_CHARS", os.getenv("AIUI_MAX_IMAGE_DATA_URL_CHARS", "8000000"))
+ENABLE_EXTERNAL_EXTRACTORS = env_bool("AIUI_ENABLE_EXTERNAL_EXTRACTORS", False)
+MAX_ATTACHMENTS = env_int("AIUI_MAX_ATTACHMENTS", env_int("AIUI_MAX_IMAGE_ATTACHMENTS", 4))
+MAX_ATTACHMENT_DATA_URL_CHARS = env_int(
+    "AIUI_MAX_ATTACHMENT_DATA_URL_CHARS", env_int("AIUI_MAX_IMAGE_DATA_URL_CHARS", 8000000)
 )
-MAX_DOCUMENT_BYTES = int(os.getenv("AIUI_MAX_DOCUMENT_BYTES", "12000000"))
-MAX_DOCUMENT_TEXT_CHARS = int(os.getenv("AIUI_MAX_DOCUMENT_TEXT_CHARS", "16000"))
-MAX_TOTAL_DOCUMENT_TEXT_CHARS = int(os.getenv("AIUI_MAX_TOTAL_DOCUMENT_TEXT_CHARS", "48000"))
-IMAGE_PART_TOKEN_ESTIMATE = int(os.getenv("AIUI_IMAGE_PART_TOKEN_ESTIMATE", "768"))
+MAX_DOCUMENT_BYTES = env_int("AIUI_MAX_DOCUMENT_BYTES", 12000000)
+MAX_DOCUMENT_TEXT_CHARS = env_int("AIUI_MAX_DOCUMENT_TEXT_CHARS", 16000)
+MAX_TOTAL_DOCUMENT_TEXT_CHARS = env_int("AIUI_MAX_TOTAL_DOCUMENT_TEXT_CHARS", 48000)
+IMAGE_PART_TOKEN_ESTIMATE = env_int("AIUI_IMAGE_PART_TOKEN_ESTIMATE", 768)
 PARKER_EVIDENCE_LABEL_RE = re.compile(r"\[E\d+\]")
 PARKER_EVIDENCE_BULLET_RE = re.compile(r"(?mi)^\s*-\s*\[E\d+\]\s+")
 TOOL_CALL_BLOCK_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.IGNORECASE | re.DOTALL)

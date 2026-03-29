@@ -68,6 +68,8 @@ type NotationDiagnostics = {
 
 const markdownHtmlCache = new Map<string, RenderedMarkdown>();
 
+// See MATH_DELIMITERS_CONTRACT.json for canonical contract.
+// Frontend normalizes backend-provided \(...\) and $$...$$ to remark-math's $...$ and $$...$$ format.
 function normalizeEscapedMathDelimiters(text: string): string {
   const codeFences: string[] = [];
   const withoutCodeFences = text.replace(/```[\s\S]*?```/g, (block) => {
@@ -77,8 +79,7 @@ function normalizeEscapedMathDelimiters(text: string): string {
   });
 
   const normalized = withoutCodeFences
-    // Convert LaTeX-style delimiters used by many models to dollar delimiters
-    // expected by remark-math.
+    // Backend sends \[...\] and \(...\), remark-math expects $$...$$ and $...$ respectively.
     .replace(/\\\[([\s\S]+?)\\\]/g, (_match, inner: string) => `$$${inner}$$`)
     .replace(/\\\((.+?)\\\)/g, (_match, inner: string) => `$${inner}$`)
     .replace(/\\\$\\\$([\s\S]+?)\\\$\\\$/g, (_match, inner: string) => `$$${inner}$$`)
@@ -223,24 +224,13 @@ function renderMessageMarkdown(content: string): RenderedMarkdown {
   const cached = markdownHtmlCache.get(source);
   if (cached) return cached;
 
-  let rendered: RenderedMarkdown = {
-    html: "",
-    fallbackReason: null,
-    trace: buildRenderTrace(source, preprocessRawText(source), "", null),
-  };
-  try {
-    rendered = renderMarkdownFromPipeline(source);
-  } catch {
-    const html = sanitizeHtml(source);
-    rendered = {
-      html,
-      fallbackReason: "pipeline-error",
-      trace: buildRenderTrace(source, preprocessRawText(source), html, "pipeline-error"),
-    };
-  }
+  // renderMarkdownFromPipeline handles all fallback logic and error recovery.
+  const rendered = renderMarkdownFromPipeline(source);
 
+  // LRU eviction: remove oldest key when cache is full (not clear all).
   if (markdownHtmlCache.size >= MAX_MARKDOWN_CACHE_SIZE) {
-    markdownHtmlCache.clear();
+    const firstKey = markdownHtmlCache.keys().next().value;
+    if (firstKey !== undefined) markdownHtmlCache.delete(firstKey);
   }
   markdownHtmlCache.set(source, rendered);
   return rendered;

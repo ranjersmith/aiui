@@ -1,6 +1,6 @@
 #!/bin/bash
-# [LEGACY] Single test runner
-# ⚠️  Deprecated. Use verify_all.sh or run_tests.sh instead.
+# [LEGACY] Deprecated wrapper — redirects to canonical run_tests.sh
+# This script is maintained for backward compatibility and will be removed in a future release.
 
-cd /workspace
-python3 test_safe_add_ints.py
+echo "[WARN] run_test.sh is deprecated. Use ./scripts/run_tests.sh instead." >&2
+exec "$(dirname "$0")/run_tests.sh" "$@"

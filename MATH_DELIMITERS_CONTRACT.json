@@ -1,0 +1,22 @@
+{
+  "description": "Canonical math delimiter contract enforced across backend and frontend",
+  "inlineMath": {
+    "canonical": "\\(...\\)",
+    "note": "KaTeX-compatible inline delimiter. Models must use this. Single $ is forbidden.",
+    "remark_math_format": "$...$",
+    "normalization": "Frontend normalizes \\(...\\) to $...$ for remark-math compatibility"
+  },
+  "displayMath": {
+    "canonical": "$$...$$",
+    "note": "Multiline equations. Must be balanced."
+  },
+  "rules": [
+    "All delimiters must be balanced and closed",
+    "Every opening delimiter requires a closing match",
+    "Do not place LaTeX outside math delimiters",
+    "Do not wrap equations in bold or italics",
+    "Leave a blank line before and after display equations"
+  ],
+  "backend_guidance": "Use \\(...\\) for inline, $$...$$ for display",
+  "frontend_normalized_to": "remark-math expects $...$ for inline and $$...$$ for display"
+}

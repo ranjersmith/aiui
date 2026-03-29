@@ -35,6 +35,16 @@ const NO_CACHE = new Set([
   "/",
 ]);
 
+// Security headers applied to all responses (immutable, defined once).
+const SECURITY_HEADERS = {
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "SAMEORIGIN",
+  "X-XSS-Protection": "1; mode=block",
+  "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
+};
+
 const server = createServer(async (req, res) => {
   let pathname;
   try {
@@ -44,16 +54,6 @@ const server = createServer(async (req, res) => {
     res.end("Bad Request");
     return;
   }
-
-  // Set security headers on all responses
-  const securityHeaders = {
-    "X-Content-Type-Options": "nosniff",
-    "X-Frame-Options": "SAMEORIGIN",
-    "X-XSS-Protection": "1; mode=block",
-    "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
-    "Referrer-Policy": "strict-origin-when-cross-origin",
-    "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
-  };
 
   // Map /  → /static/index.html
   // Map /static/xyz → xyz within ROOT
@@ -72,7 +72,7 @@ const server = createServer(async (req, res) => {
   if (!filePath.startsWith(ROOT + "/") && filePath !== ROOT) {
     res.writeHead(403, {
       "Content-Type": "text/plain",
-      ...securityHeaders,
+      ...SECURITY_HEADERS,
     });
     res.end("Forbidden");
     return;
@@ -85,13 +85,13 @@ const server = createServer(async (req, res) => {
     res.writeHead(200, {
       "Content-Type": mime,
       "Cache-Control": noCache ? "no-store" : "public, max-age=3600",
-      ...securityHeaders,
+      ...SECURITY_HEADERS,
     });
     res.end(data);
   } catch {
     res.writeHead(404, {
       "Content-Type": "text/plain",
-      ...securityHeaders,
+      ...SECURITY_HEADERS,
     });
     res.end("Not Found");
   }
