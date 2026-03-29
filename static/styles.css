@@ -278,15 +278,17 @@ body {
 
 .md-rendered pre {
   overflow-x: auto;
-  border: 1px solid var(--line);
+  border: 1px solid #333;
   border-radius: 8px;
-  background: #fff8e8;
-  padding: 10px;
+  background: #1e1e1e;
+  padding: 12px 14px;
 }
 
 .md-rendered pre code {
   background: transparent;
   padding: 0;
+  color: inherit;
+  font-size: 0.9em;
 }
 
 .md-rendered table {

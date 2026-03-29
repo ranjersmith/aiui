@@ -7,6 +7,7 @@ import remarkParse from "remark-parse";
 import remarkMath from "remark-math";
 import remarkRehype from "remark-rehype";
 import rehypeKatex from "rehype-katex";
+import rehypeHighlight from "rehype-highlight";
 import rehypeStringify from "rehype-stringify";
 
 import { readConfig } from "./core/config.mjs";
@@ -26,6 +27,7 @@ const mathRenderer = unified().use(rehypeKatex, {
   throwOnError: false,
   strict: "ignore",
 });
+const codeHighlighter = unified().use(rehypeHighlight, { detect: true, ignoreMissing: true });
 const hastStringifier = unified().use(rehypeStringify);
 
 const domPurify = typeof window !== "undefined" ? createDOMPurify(window) : null;
@@ -134,23 +136,18 @@ function buildRenderTrace(
 }
 
 function renderMarkdownWithMath(raw: string): string {
-  // Pipeline stage: raw text -> markdown tokenizer -> markdown AST (mdast)
   const mdast = markdownTokenizer.parse(raw);
-
-  // Pipeline stage: mdast -> hast (HTML AST)
   const hast = mdastToHast.runSync(mdast);
-
-  // Pipeline stage: KaTeX render on math nodes inside hast
   const hastWithMath = mathRenderer.runSync(hast);
-
-  // Pipeline stage: hast -> HTML string
-  return String(hastStringifier.stringify(hastWithMath));
+  const hastWithHighlight = codeHighlighter.runSync(hastWithMath);
+  return String(hastStringifier.stringify(hastWithHighlight));
 }
 
 function renderMarkdownPlain(raw: string): string {
   const mdast = plainMarkdownTokenizer.parse(raw);
   const hast = mdastToHast.runSync(mdast);
-  return String(hastStringifier.stringify(hast));
+  const hastWithHighlight = codeHighlighter.runSync(hast);
+  return String(hastStringifier.stringify(hastWithHighlight));
 }
 
 function renderMarkdownFromPipeline(content: string): RenderedMarkdown {
