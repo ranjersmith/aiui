@@ -296,6 +296,15 @@ function buildNotationDiagnostics(
 
 function App() {
   const config = createMemo(readConfig);
+  
+  // Log config on mount for debugging (helpful for mobile troubleshooting)
+  if (typeof window !== "undefined") {
+    console.log("[aiui] config:", {
+      baseUrl: config().baseUrl,
+      model: config().model,
+      provider: config().provider,
+    });
+  }
   const [messages, setMessages] = createSignal<ChatMessage[]>([]);
   const [input, setInput] = createSignal("");
   const [pendingAttachments, setPendingAttachments] = createSignal<Attachment[]>([]);

@@ -74,21 +74,29 @@ export const streamOpenAiCompatible: StreamProvider = async ({
     messages.unshift({ role: "system", content: systemPrompt });
   }
 
-  const response = await fetch(`${baseUrl}/v1/chat/completions`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: config.model,
-      messages,
-      stream: true,
-      stream_options: { include_usage: true },
-      temperature: config.temperature,
-      max_tokens: config.maxTokens,
-    }),
-    signal,
-  });
+  const endpoint = `${baseUrl}/v1/chat/completions`;
+
+  let response: Response;
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: config.model,
+        messages,
+        stream: true,
+        stream_options: { include_usage: true },
+        temperature: config.temperature,
+        max_tokens: config.maxTokens,
+      }),
+      signal,
+    });
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to connect to LLM at ${endpoint}: ${errMsg}`);
+  }
 
   if (!response.ok) {
     let body: unknown = null;
