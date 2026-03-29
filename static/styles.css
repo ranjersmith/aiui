@@ -287,7 +287,7 @@ body {
 .md-rendered pre code {
   background: transparent;
   padding: 0;
-  color: inherit;
+  color: #d4d4d4;
   font-size: 0.9em;
 }
 
