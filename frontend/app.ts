@@ -558,15 +558,6 @@ function App() {
           <div class="muted">provider: ${() => config().provider}</div>
           <div class="muted">model: ${activeModel}</div>
           <div class="muted">${status}</div>
-          <div class="muted">
-            first token: ${() => (firstTokenLatencyMs() === null ? "-" : `${firstTokenLatencyMs()} ms`)}
-          </div>
-          <div class="muted">tokens: ${tokenCount}</div>
-          <div class="muted">rate: ${tokensPerSecond} t/s</div>
-          <div class="muted">
-            elapsed: ${() => (totalElapsedMs() === null ? "-" : `${totalElapsedMs()} ms`)}
-          </div>
-          <div class="muted">flushes/s: ${flushesPerSecond}</div>
           <!-- Debug monitor UI hidden by default; enable with ?debug=1 URL param -->
           ${() => {
             // Notation diagnostics debug monitor (development only)
