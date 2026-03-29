@@ -527,9 +527,11 @@ def validate_attachments(attachments: list[Attachment]) -> None:
         )
     total_bytes = 0
     for a in attachments:
-        if a.data:
+        if a.data_url:
             try:
-                total_bytes += len(base64.b64decode(a.data))
+                # data_url may be "data:<mime>;base64,<payload>" or raw base64
+                raw = a.data_url.split(",", 1)[-1] if "," in a.data_url else a.data_url
+                total_bytes += len(base64.b64decode(raw))
             except (binascii.Error, ValueError):
                 pass  # Invalid base64; will be caught elsewhere
     if total_bytes > _MAX_ATTACHMENT_BYTES_PER_REQUEST:

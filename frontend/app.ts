@@ -12,7 +12,7 @@ import rehypeStringify from "rehype-stringify";
 
 import { readConfig } from "./core/config.mjs";
 import { providerFor } from "./providers";
-import type { ChatMessage, StreamHandlers } from "./core/types";
+import type { Attachment, ChatMessage, StreamHandlers } from "./core/types";
 
 const MAX_RENDERED_MESSAGES = 120;
 const MAX_MARKDOWN_CACHE_SIZE = 500;
@@ -298,6 +298,7 @@ function App() {
   const config = createMemo(readConfig);
   const [messages, setMessages] = createSignal<ChatMessage[]>([]);
   const [input, setInput] = createSignal("");
+  const [pendingAttachments, setPendingAttachments] = createSignal<Attachment[]>([]);
   const [isStreaming, setIsStreaming] = createSignal(false);
   const [status, setStatus] = createSignal("idle");
   const [activeModel, setActiveModel] = createSignal(config().model);
@@ -312,6 +313,7 @@ function App() {
   const [lastCompletedMetrics, setLastCompletedMetrics] = createSignal<string | null>(null);
 
   let currentAbort: AbortController | null = null;
+  let fileInputRef: HTMLInputElement | undefined;
   let pendingDelta = "";
   let flushTimer: number | null = null;
   let lastMonitorLogAtMs = 0;
@@ -375,13 +377,70 @@ function App() {
     }, 1000);
   }
 
+  const TEXT_EXTS = new Set([
+    ".txt", ".md", ".py", ".js", ".ts", ".jsx", ".tsx", ".json", ".yaml", ".yml",
+    ".toml", ".csv", ".xml", ".html", ".css", ".sh", ".bash", ".zsh", ".rb",
+    ".go", ".rs", ".java", ".c", ".cpp", ".h", ".hpp", ".sql", ".env", ".ini",
+    ".cfg", ".conf", ".log",
+  ]);
+
+  function isTextFile(file: File): boolean {
+    if (file.type.startsWith("text/")) return true;
+    const ext = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
+    return TEXT_EXTS.has(ext);
+  }
+
+  function handleFileSelect(event: Event): void {
+    const input = event.currentTarget as HTMLInputElement;
+    const files = Array.from(input.files || []);
+    input.value = "";
+
+    for (const file of files) {
+      const reader = new FileReader();
+      if (file.type.startsWith("image/")) {
+        reader.onload = () => {
+          setPendingAttachments((prev) => [
+            ...prev,
+            {
+              type: "image",
+              name: file.name,
+              mimeType: file.type,
+              dataUrl: reader.result as string,
+            },
+          ]);
+        };
+        reader.readAsDataURL(file);
+      } else if (isTextFile(file)) {
+        reader.onload = () => {
+          setPendingAttachments((prev) => [
+            ...prev,
+            {
+              type: "text",
+              name: file.name,
+              mimeType: file.type || "text/plain",
+              textContent: reader.result as string,
+            },
+          ]);
+        };
+        reader.readAsText(file);
+      }
+      // PDF/DOCX silently ignored — requires backend support
+    }
+  }
+
   async function sendMessage() {
     const text = input().trim();
-    if (!text || isStreaming()) return;
+    const attachments = pendingAttachments();
+    if ((!text && attachments.length === 0) || isStreaming()) return;
 
     const history = messages();
-    setMessages([...history, { role: "user", content: text }, { role: "assistant", content: "" }]);
+    setMessages([
+      ...history,
+      { role: "user", content: text, attachments: attachments.length ? attachments : undefined },
+      { role: "assistant", content: "" },
+    ]);
     setInput("");
+    setPendingAttachments([]);
     setStatus("streaming...");
     setIsStreaming(true);
 
@@ -483,6 +542,7 @@ function App() {
         config: config(),
         userText: text,
         history,
+        attachments,
         signal: abortController.signal,
         handlers,
       });
@@ -554,6 +614,15 @@ function App() {
               : null}
         </div>
         <div class="msg-content">
+          ${msg.attachments?.length
+            ? html`<div class="msg-attachments">
+                ${msg.attachments.map((a) =>
+                  a.type === "image" && a.dataUrl
+                    ? html`<img class="msg-attachment-thumb" src=${a.dataUrl} alt=${a.name} title=${a.name} />`
+                    : html`<span class="msg-attachment-file" title=${a.name}>📄 ${a.name}</span>`
+                )}
+              </div>`
+            : null}
           <div class="md-rendered" innerHTML=${rendered.html}></div>
         </div>
       </article>`;
@@ -647,6 +716,33 @@ function App() {
         </section>
 
         <section class="composer">
+          <input
+            type="file"
+            multiple
+            accept="image/png,image/jpeg,image/gif,image/webp,.txt,.md,.py,.js,.ts,.jsx,.tsx,.json,.yaml,.yml,.toml,.csv,.xml,.html,.css,.sh,.rb,.go,.rs,.java,.c,.cpp,.h,.sql"
+            style="display:none"
+            ref=${(el: HTMLInputElement) => { fileInputRef = el; }}
+            onChange=${handleFileSelect}
+          />
+          ${() => {
+            const chips = pendingAttachments();
+            if (!chips.length) return null;
+            return html`<div class="composer-attachments">
+              ${chips.map((a, i) =>
+                html`<div class="attachment-chip">
+                  ${a.type === "image" && a.dataUrl
+                    ? html`<img class="attachment-chip-thumb" src=${a.dataUrl} alt=${a.name} />`
+                    : html`<span class="attachment-chip-icon">📄</span>`}
+                  <span class="attachment-chip-name">${a.name}</span>
+                  <button
+                    class="attachment-chip-remove"
+                    title="Remove"
+                    onClick=${() => setPendingAttachments((prev) => prev.filter((_, j) => j !== i))}
+                  >×</button>
+                </div>`
+              )}
+            </div>`;
+          }}
           <div class="composer-shell">
             <textarea
               class="input composer-textarea"
@@ -667,6 +763,12 @@ function App() {
           </div>
 
           <div class="composer-buttons">
+            <button
+              class="button secondary"
+              title="Attach file"
+              onClick=${() => fileInputRef?.click()}
+              disabled=${isStreaming}
+            >📎</button>
             <button class="button primary" onClick=${() => void sendMessage()} disabled=${isStreaming}>
               ${() => (isStreaming() ? "streaming..." : "send")}
             </button>

@@ -1,11 +1,59 @@
 import { normalizeBaseUrl } from "../core/config.mjs";
 import { parseSseBuffer, buildErrorMessage } from "../core/sse.mjs";
-import type { StreamProvider } from "../core/types";
+import type { Attachment, StreamProvider } from "../core/types";
+
+type ContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
+/** Build OpenAI-compatible content from text + attachments for the current turn. */
+function buildUserContent(userText: string, attachments: Attachment[]): string | ContentPart[] {
+  const images = attachments.filter((a) => a.type === "image" && a.dataUrl);
+  const texts = attachments.filter((a) => a.type === "text" && a.textContent);
+
+  if (images.length === 0 && texts.length === 0) {
+    return userText;
+  }
+
+  const parts: ContentPart[] = [];
+
+  // Inject text-file attachments as XML-fenced blocks before the user's prompt.
+  let textBlock = "";
+  for (const a of texts) {
+    textBlock += `<file name="${a.name}">\n${a.textContent}\n</file>\n\n`;
+  }
+  const fullText = textBlock ? `${textBlock}${userText}`.trimEnd() : userText;
+  if (fullText) {
+    parts.push({ type: "text", text: fullText });
+  }
+
+  for (const img of images) {
+    parts.push({ type: "image_url", image_url: { url: img.dataUrl! } });
+  }
+
+  return parts;
+}
+
+/** Build content for a history message (images are omitted to keep payload small). */
+function buildHistoryContent(
+  content: string,
+  attachments: Attachment[] | undefined
+): string | ContentPart[] {
+  const texts = (attachments || []).filter((a) => a.type === "text" && a.textContent);
+  if (texts.length === 0) return content;
+
+  let textBlock = "";
+  for (const a of texts) {
+    textBlock += `<file name="${a.name}">\n${a.textContent}\n</file>\n\n`;
+  }
+  return `${textBlock}${content}`.trimEnd();
+}
 
 export const streamOpenAiCompatible: StreamProvider = async ({
   config,
   userText,
   history,
+  attachments,
   signal,
   handlers,
 }) => {
@@ -16,8 +64,11 @@ export const streamOpenAiCompatible: StreamProvider = async ({
 
   const systemPrompt = String(config.systemPrompt || "").trim();
   const messages = [
-    ...history.map((msg) => ({ role: msg.role, content: msg.content })),
-    { role: "user", content: userText },
+    ...history.map((msg) => ({
+      role: msg.role,
+      content: buildHistoryContent(msg.content, msg.attachments),
+    })),
+    { role: "user", content: buildUserContent(userText, attachments) },
   ];
   if (systemPrompt) {
     messages.unshift({ role: "system", content: systemPrompt });
