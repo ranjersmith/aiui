@@ -312,6 +312,7 @@ function App() {
   const [notationDiagnostics, setNotationDiagnostics] = createSignal<NotationDiagnostics | null>(null);
   const [streamingPreview, setStreamingPreview] = createSignal<StreamingPreview | null>(null);
   const [renderTrace, setRenderTrace] = createSignal<RenderTrace | null>(null);
+  const [lastCompletedMetrics, setLastCompletedMetrics] = createSignal<string | null>(null);
 
   let currentAbort: AbortController | null = null;
   let pendingDelta = "";
@@ -394,6 +395,7 @@ function App() {
     setTokensPerSecond(0);
     setTotalElapsedMs(null);
     setStreamingPreview(null);
+    setLastCompletedMetrics(null);
     startFlushRateMeter();
 
     const abortController = new AbortController();
@@ -441,6 +443,9 @@ function App() {
         setTotalElapsedMs(elapsedMs);
         const finalRate = Math.round((tokenCount() * 1000) / Math.max(elapsedMs, 1));
         setTokensPerSecond(finalRate);
+        const ttftSnap = firstTokenLatencyMs() ?? 0;
+        const toksSnap = tokenCount();
+        setLastCompletedMetrics(`⏱ ${ttftSnap}ms • ${toksSnap}t • ${finalRate}t/s • ${elapsedMs}ms`);
         if (summary && summary !== "done") {
           setStatus(`done | ${summary}`);
         } else {
@@ -459,6 +464,10 @@ function App() {
         logRenderTrace(errored.trace);
         const elapsedMs = Math.round(performance.now() - streamStartedAtMs);
         setTotalElapsedMs(elapsedMs);
+        const ttftErr = firstTokenLatencyMs() ?? 0;
+        const toksErr = tokenCount();
+        const rateErr = Math.round((toksErr * 1000) / Math.max(elapsedMs, 1));
+        setLastCompletedMetrics(`⏱ ${ttftErr}ms • ${toksErr}t • ${rateErr}t/s • ${elapsedMs}ms`);
         setStatus(`error: ${errorText}`);
         setMessages((prev) => {
           const next = [...prev];
@@ -530,6 +539,8 @@ function App() {
         ? streamingPreview() || renderStreamingPreview(msg.content, "")
         : renderMessageMarkdown(msg.content);
 
+      const isLastAssistant = msg.role === "assistant" && index === lastIndex;
+
       return html`<article class=${`msg ${msg.role}`}>
         <div class="msg-meta">
           ${msg.role === "assistant" ? "aiui" : "user"}
@@ -541,7 +552,9 @@ function App() {
                 const elapsed = totalElapsedMs() ?? 0;
                 return `⏱ ${ttft}ms • ${toks}t • ${rate}t/s • ${elapsed}ms`;
               }}</span>`
-            : null}
+            : isLastAssistant && lastCompletedMetrics()
+              ? html`<span class="render-debug-badge">${lastCompletedMetrics}</span>`
+              : null}
         </div>
         <div class="msg-content">
           <div class="md-rendered" innerHTML=${rendered.html}></div>
@@ -555,8 +568,6 @@ function App() {
       <aside class="sidebar">
         <div class="sidebar-header">
           <div class="brand">aiui</div>
-          <div class="muted">provider: ${() => config().provider}</div>
-          <div class="muted">model: ${activeModel}</div>
           <div class="muted">${status}</div>
           <!-- Debug monitor UI hidden by default; enable with ?debug=1 URL param -->
           ${() => {
