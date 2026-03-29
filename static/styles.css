@@ -67,6 +67,39 @@ body {
   gap: 8px;
 }
 
+.network-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  background: #f0ede2;
+  color: #5d583f;
+}
+
+.network-status.ok {
+  background: #e6f3ed;
+  color: #1d5d44;
+}
+
+.network-status.warn {
+  background: #f3e6e6;
+  color: #8b3a3a;
+}
+
+.network-status.muted {
+  background: #f0ede2;
+  color: #5d583f;
+}
+
+.network-status-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .brand {
   font-size: 20px;
   font-weight: 800;

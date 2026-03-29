@@ -304,6 +304,44 @@ function App() {
       model: config().model,
       provider: config().provider,
     });
+    
+    // Test network connection on startup
+    const testNetworkConnection = async () => {
+      const baseUrl = config().baseUrl;
+      const endpoint = `${baseUrl}/v1/models`;
+      console.log("[aiui] testing network endpoint:", endpoint);
+      setNetworkDiagnostics({
+        resolvedBaseUrl: baseUrl,
+        endpoint,
+        connectionStatus: "testing",
+        lastTestAt: new Date().toLocaleTimeString(),
+      });
+      
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+        const resp = await fetch(endpoint, { method: "HEAD", signal: controller.signal });
+        clearTimeout(timeout);
+        console.log("[aiui] network test result:", { status: resp.status, ok: resp.ok });
+        setNetworkDiagnostics({
+          resolvedBaseUrl: baseUrl,
+          endpoint,
+          connectionStatus: resp.ok ? "ok" : "failed",
+          lastTestAt: new Date().toLocaleTimeString(),
+        });
+      } catch (err) {
+        console.error("[aiui] network test failed:", err);
+        setNetworkDiagnostics({
+          resolvedBaseUrl: baseUrl,
+          endpoint,
+          connectionStatus: "failed",
+          lastTestAt: new Date().toLocaleTimeString(),
+        });
+      }
+    };
+    
+    // Run test after a short delay to let app render
+    setTimeout(testNetworkConnection, 500);
   }
   const [messages, setMessages] = createSignal<ChatMessage[]>([]);
   const [input, setInput] = createSignal("");
@@ -320,6 +358,12 @@ function App() {
   const [streamingPreview, setStreamingPreview] = createSignal<StreamingPreview | null>(null);
   const [renderTrace, setRenderTrace] = createSignal<RenderTrace | null>(null);
   const [lastCompletedMetrics, setLastCompletedMetrics] = createSignal<string | null>(null);
+  const [networkDiagnostics, setNetworkDiagnostics] = createSignal<{
+    resolvedBaseUrl: string;
+    endpoint: string;
+    connectionStatus: "unknown" | "ok" | "failed" | "testing";
+    lastTestAt: string;
+  } | null>(null);
 
   let currentAbort: AbortController | null = null;
   let fileInputRef: HTMLInputElement | undefined;
@@ -644,7 +688,38 @@ function App() {
         <div class="sidebar-header">
           <div class="brand">aiui</div>
           <div class="muted">${activeModel}</div>
+          <!-- Network diagnostics card (always visible, compact on mobile) -->
+          ${() => {
+            const diag = networkDiagnostics();
+            if (!diag) return null;
+            const statusEmoji = { ok: "✓", failed: "✗", testing: "⋯", unknown: "?" }[diag.connectionStatus] || "?";
+            const statusColor = { ok: "ok", failed: "warn", testing: "muted", unknown: "muted" }[diag.connectionStatus] || "muted";
+            return html`<div class=${`network-status ${statusColor}`}>
+              <span>${statusEmoji}</span>
+              <span class="network-status-text">${diag.connectionStatus}</span>
+            </div>`;
+          }}
           <!-- Debug monitor UI hidden by default; enable with ?debug=1 URL param -->
+          ${() => {
+            // Network diagnostics monitor (debug only)
+            const debug = new URLSearchParams(location.search).get("debug") === "1";
+            if (!debug) return null;
+            
+            const diag = networkDiagnostics();
+            if (!diag) return null;
+
+            return html`<div class="monitor-card">
+              <div class="monitor-title">network diagnostics</div>
+              <div class="monitor-grid">
+                <div class="monitor-row">resolved baseUrl: ${diag.resolvedBaseUrl}</div>
+                <div class="monitor-row">endpoint: ${diag.endpoint}</div>
+                <div class=${`monitor-row ${diag.connectionStatus === "ok" ? "ok" : diag.connectionStatus === "failed" ? "warn" : ""}`}>
+                  status: ${diag.connectionStatus}
+                </div>
+                <div class="monitor-row">tested: ${diag.lastTestAt}</div>
+              </div>
+            </div>`;
+          }}
           ${() => {
             // Notation diagnostics debug monitor (development only)
             const debug = new URLSearchParams(location.search).get("debug") === "1";

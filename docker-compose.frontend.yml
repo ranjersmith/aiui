@@ -8,10 +8,11 @@ services:
       - "3311:8080"
     environment:
       LLM_UI_PROVIDER: "${LLM_UI_PROVIDER:-openai}"
-      # Must be the URL the *browser* can reach — set to your host IP or hostname.
-      # For local testing: http://127.0.0.1:8081
-      # For remote: http://<your-host-ip>:8081
-      LLM_UI_BASE_URL: "${LLM_UI_BASE_URL:-http://127.0.0.1:8081}"
+      # Browser-side baseUrl for LLM API calls.
+      # Default: use /llm proxy (requires nginx/reverse-proxy in production).
+      # For direct connection, set to absolute URL: http://192.168.x.x:8081
+      # Docker container access: http://host.docker.internal:8081 (macOS/Windows)
+      LLM_UI_BASE_URL: "${LLM_UI_BASE_URL:-/llm}"
       LLM_UI_MODEL: "Qwen/Qwen3-VL-8B-Instruct"
       LLM_UI_TEMPERATURE: "0.3"
       LLM_UI_MAX_TOKENS: "4096"
