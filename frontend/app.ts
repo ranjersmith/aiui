@@ -296,53 +296,6 @@ function buildNotationDiagnostics(
 
 function App() {
   const config = createMemo(readConfig);
-  
-  // Log config on mount for debugging (helpful for mobile troubleshooting)
-  if (typeof window !== "undefined") {
-    console.log("[aiui] config:", {
-      baseUrl: config().baseUrl,
-      model: config().model,
-      provider: config().provider,
-    });
-    
-    // Test network connection on startup
-    const testNetworkConnection = async () => {
-      const baseUrl = config().baseUrl;
-      const endpoint = `${baseUrl}/v1/models`;
-      console.log("[aiui] testing network endpoint:", endpoint);
-      setNetworkDiagnostics({
-        resolvedBaseUrl: baseUrl,
-        endpoint,
-        connectionStatus: "testing",
-        lastTestAt: new Date().toLocaleTimeString(),
-      });
-      
-      try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 5000);
-        const resp = await fetch(endpoint, { method: "HEAD", signal: controller.signal });
-        clearTimeout(timeout);
-        console.log("[aiui] network test result:", { status: resp.status, ok: resp.ok });
-        setNetworkDiagnostics({
-          resolvedBaseUrl: baseUrl,
-          endpoint,
-          connectionStatus: resp.ok ? "ok" : "failed",
-          lastTestAt: new Date().toLocaleTimeString(),
-        });
-      } catch (err) {
-        console.error("[aiui] network test failed:", err);
-        setNetworkDiagnostics({
-          resolvedBaseUrl: baseUrl,
-          endpoint,
-          connectionStatus: "failed",
-          lastTestAt: new Date().toLocaleTimeString(),
-        });
-      }
-    };
-    
-    // Run test after a short delay to let app render
-    setTimeout(testNetworkConnection, 500);
-  }
   const [messages, setMessages] = createSignal<ChatMessage[]>([]);
   const [input, setInput] = createSignal("");
   const [pendingAttachments, setPendingAttachments] = createSignal<Attachment[]>([]);
@@ -363,7 +316,10 @@ function App() {
     endpoint: string;
     connectionStatus: "unknown" | "ok" | "failed" | "testing";
     lastTestAt: string;
+    lastError: string;
   } | null>(null);
+  const [proxyHealthError, setProxyHealthError] = createSignal<string | null>(null);
+  const [proxyHealthChecking, setProxyHealthChecking] = createSignal(false);
 
   let currentAbort: AbortController | null = null;
   let fileInputRef: HTMLInputElement | undefined;
@@ -374,6 +330,88 @@ function App() {
   let hasSeenFirstToken = false;
   let flushCountCurrentSecond = 0;
   let flushRateInterval: number | null = null;
+  let hasLoggedProxyHealthFailure = false;
+
+  async function runProxyHealthCheck(trigger: "startup" | "retry") {
+    const baseUrl = config().baseUrl;
+    const endpoint = `${baseUrl}/v1/models`;
+
+    setProxyHealthChecking(true);
+    setProxyHealthError(null);
+    setNetworkDiagnostics({
+      resolvedBaseUrl: baseUrl,
+      endpoint,
+      connectionStatus: "testing",
+      lastTestAt: new Date().toLocaleTimeString(),
+      lastError: "",
+    });
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 5000);
+
+    try {
+      const response = await fetch(endpoint, {
+        method: "GET",
+        signal: controller.signal,
+        headers: { Accept: "application/json" },
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      setNetworkDiagnostics({
+        resolvedBaseUrl: baseUrl,
+        endpoint,
+        connectionStatus: "ok",
+        lastTestAt: new Date().toLocaleTimeString(),
+        lastError: "",
+      });
+      setProxyHealthError(null);
+    } catch (error) {
+      const errorText =
+        error instanceof DOMException && error.name === "AbortError"
+          ? "timeout after 5s"
+          : error instanceof Error
+            ? error.message
+            : String(error);
+
+      setNetworkDiagnostics({
+        resolvedBaseUrl: baseUrl,
+        endpoint,
+        connectionStatus: "failed",
+        lastTestAt: new Date().toLocaleTimeString(),
+        lastError: errorText,
+      });
+      setProxyHealthError(`Backend unreachable (${errorText})`);
+
+      if (!hasLoggedProxyHealthFailure) {
+        // Log full details only once per page load to avoid noisy console spam.
+        console.error("[aiui] proxy health check failed", {
+          trigger,
+          endpoint,
+          baseUrl,
+          error: errorText,
+        });
+        hasLoggedProxyHealthFailure = true;
+      }
+    } finally {
+      window.clearTimeout(timeout);
+      setProxyHealthChecking(false);
+    }
+  }
+
+  // Log config once and run a non-blocking startup probe.
+  if (typeof window !== "undefined") {
+    console.log("[aiui] config:", {
+      baseUrl: config().baseUrl,
+      model: config().model,
+      provider: config().provider,
+    });
+    window.setTimeout(() => {
+      void runProxyHealthCheck("startup");
+    }, 500);
+  }
 
   function flushPendingDelta() {
     if (!pendingDelta) return;
@@ -717,6 +755,7 @@ function App() {
                   status: ${diag.connectionStatus}
                 </div>
                 <div class="monitor-row">tested: ${diag.lastTestAt}</div>
+                <div class="monitor-row">error: ${diag.lastError || "-"}</div>
               </div>
             </div>`;
           }}
@@ -786,6 +825,20 @@ function App() {
 
       <main class="main">
         <section class="thread">
+          ${() => {
+            const error = proxyHealthError();
+            if (!error) return null;
+            return html`<div class="proxy-health-banner" role="status" aria-live="polite">
+              <span class="proxy-health-text">${error}</span>
+              <button
+                class="button proxy-health-retry"
+                onClick=${() => {
+                  void runProxyHealthCheck("retry");
+                }}
+                disabled=${proxyHealthChecking}
+              >${() => (proxyHealthChecking() ? "retrying..." : "retry")}</button>
+            </div>`;
+          }}
           ${() =>
             hiddenMessageCount() > 0
               ? html`<div class="muted">Showing latest ${MAX_RENDERED_MESSAGES} of ${messages().length} messages</div>`
