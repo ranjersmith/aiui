@@ -416,6 +416,10 @@ ${i.textContent}
               class="input composer-textarea"
               value=${r}
               placeholder="ask anything..."
+              autocomplete="off"
+              autocapitalize="off"
+              autocorrect="off"
+              spellcheck="false"
               onInput=${be=>{let ee=be.currentTarget;i(ee.value)}}
               onKeyDown=${be=>{be.key==="Enter"&&!be.shiftKey&&(be.preventDefault(),qe())}}
               disabled=${s}

@@ -342,6 +342,7 @@ body {
   padding: 9px;
   font-family: var(--sans);
   font-size: 14px;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .input {
@@ -350,6 +351,11 @@ body {
 
 .button {
   cursor: pointer;
+  transition: background-color 0.2s, transform 0.1s;
+}
+
+.button:active {
+  transform: scale(0.98);
 }
 
 .button.primary {
@@ -357,6 +363,10 @@ body {
   border: 0;
   color: #f6fff3;
   font-weight: 700;
+}
+
+.button.primary:active {
+  opacity: 0.9;
 }
 
 .button.warn {
@@ -486,25 +496,77 @@ body {
 
   .app-layout {
     grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
   }
 
   .sidebar {
     border-right: 0;
     border-bottom: 1px solid var(--line);
     grid-template-rows: auto;
+    grid-template-columns: 1fr auto auto;
+    gap: 8px;
+    align-items: center;
+    padding: 8px 10px;
   }
 
-  .chat-list,
-  .sidebar-footer {
+  .sidebar-header {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    min-width: 0;
+  }
+
+  .brand {
+    font-size: 16px;
+  }
+
+  .sidebar-header .muted {
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 1;
+  }
+
+  .chat-list {
     display: none;
   }
 
+  .sidebar-footer {
+    display: flex;
+    border: none;
+    padding: 0;
+    gap: 4px;
+  }
+
+  .sidebar-footer .button {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 6px 10px;
+    font-size: 13px;
+  }
+
   .thread {
-    padding: 12px;
+    padding: 8px;
   }
 
   .msg {
     max-width: 98%;
+  }
+
+  .button {
+    min-height: 44px;
+    padding: 8px 12px;
+    font-size: 14px;
+  }
+
+  .composer-textarea {
+    min-height: 72px !important;
+    font-size: 16px;
+  }
+
+  .attachment-chip-name {
+    max-width: 120px;
   }
 }
 

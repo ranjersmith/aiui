@@ -748,6 +748,10 @@ function App() {
               class="input composer-textarea"
               value=${input}
               placeholder="ask anything..."
+              autocomplete="off"
+              autocapitalize="off"
+              autocorrect="off"
+              spellcheck="false"
               onInput=${(event: InputEvent) => {
                 const target = event.currentTarget as HTMLTextAreaElement;
                 setInput(target.value);
