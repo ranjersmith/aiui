@@ -53,33 +53,19 @@ Existing AIUI tools, now in deterministic registry pattern:
 
 ---
 
-### 4. Qwen-Agent Framework Tools (19 tools) 📅 TODO
+### 4. Qwen-Agent Framework Tools (REMOVED)
 
-Available in the local Qwen-Agent repo (`/home/ra/qwenv/Qwen-Agent`). Can be integrated:
+Qwen-Agent integration has been removed from this stack.
 
-**High Priority** (integrate first):
-- `code_interpreter` — Python execution for analysis
-- `web_search` — Search the web
-- `python_executor` — Enhanced Python sandboxing
-- `retrieval` — RAG integration with vector DB
-
-**Medium Priority** (integrate after core):
-- `image_search` — Image search capability
-- `web_extractor` — Extract structured data from websites
-- `doc_parser` — Parse documents
-- `simple_doc_parser` — Lightweight doc parsing
-
-**Lower Priority** (specialized):
-- `image_zoom_in_qwen3vl` — Requires Qwen3-VL model
-- `image_gen` — Image generation (requires API key)
-- `amap_weather` — Weather API
-- Search variants (keyword, keyword_search, hybrid, front_page, vector_search)
+- Removed runtime dependency on `/home/ra/qwenv`
+- Removed related services on ports `3312`, `7863`, and `7866`
+- Keep this project focused on AIUI + llama.cpp (`8081`) + nomic embeddings (`8083`)
 
 ---
 
 ### 5. MCP (Model Context Protocol) Integration ✅ AVAILABLE
 
-Qwen-Agent supports MCP servers. Two are already set up in examples:
+AIUI supports MCP servers. Two baseline examples:
 
 ```python
 'mcpServers': {
@@ -170,7 +156,6 @@ tm.switch_strategy("qwen_native")
 - **Double context window** — Use 64K instead of 32K
 
 ### Phase 3 (INTEGRATION) 📅
-- Add Qwen-Agent tools (code_interpreter, web_search, retrieval)
 - Implement MCP server integration (time, SQLite, etc.)
 - Parallel tool execution (async/gather)
 - Tool result summarization for context efficiency
@@ -284,10 +269,6 @@ tools:
     - calculator
     - get_current_time
     
-    # Qwen-Agent tools (to integrate)
-    # - web_search
-    # - code_interpreter
-
 function_calling:
   strategy: "nous"  # or "qwen_native" for Qwen3.5
   # strategy: "qwen_native"  # RECOMMENDED for Qwen3.5-9B
@@ -334,6 +315,6 @@ aiui/tools/
 2. **Switch to registry in app.py** — Replace monolithic injection with `ToolManager`
 3. **Benchmark strategies** — Compare accuracy: Nous vs qwen_native
 4. **Enable llama.cpp native tools** — Add `--tools "read_file,write_file"` to 8081 startup
-5. **Integrate Qwen-Agent tools** — Import code_interpreter, web_search, etc.
+5. **Integrate additional MCP tools** — Add time, SQLite, fetch, etc.
 6. **Expose reasoning toggle** — Add UI option to enable/disable thinking mode
 7. **Parallel execution** — Implement async tool execution

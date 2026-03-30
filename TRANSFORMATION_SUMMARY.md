@@ -141,15 +141,12 @@ Benefits:
 - `get_current_time` ✅
 - `search_conversation` ✅ (wire to conversation context)
 
-### 4. Qwen-Agent Framework (19 tools) — AVAILABLE FOR IMPORT
+### 4. Qwen-Agent Framework — REMOVED
 
-**High Priority:**
-- code_interpreter (Python execution)
-- web_search
-- python_executor (sandboxed)
-- retrieval (RAG)
-
-**To integrate:** Copy pattern from `builtin_llama.py` or `builtin_aiui.py`
+Qwen-Agent bits were removed from this environment to keep the runtime focused on:
+- AIUI frontend (`3311`)
+- llama.cpp text model (`8081`)
+- nomic embeddings (`8083`)
 
 ---
 
@@ -285,7 +282,6 @@ print(tm.get_tools_instruction())  # DeepSeek format
 ### Phase 3: Expand Capabilities (📅 WEEK 2, ~4 hours)
 - [ ] Expose reasoning toggle (UI: on/off per query)
 - [ ] Double context window (32K → 64K)
-- [ ] Add Qwen-Agent tools (code_interpreter, web_search)
 - [ ] Parallel tool execution (async/gather)
 
 ### Phase 4: Advanced Features (🔮 FUTURE)
