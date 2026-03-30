@@ -23,7 +23,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--model",
-        default="Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf",
+        default="Qwen3.5-9B-BF16.gguf",
         help="Model id to report in the request payload.",
     )
     parser.add_argument(

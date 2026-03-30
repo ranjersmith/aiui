@@ -17,7 +17,7 @@ from typing import Any
 
 
 DEFAULT_URL = "http://127.0.0.1:8081/v1/chat/completions"
-DEFAULT_MODEL = "Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf"
+DEFAULT_MODEL = "Qwen3.5-9B-BF16.gguf"
 DEFAULT_PROMPTS = Path(__file__).resolve().parent.parent / "eval" / "prompts_qwen35b_ab.jsonl"
 
 

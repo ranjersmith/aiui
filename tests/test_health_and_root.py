@@ -80,7 +80,7 @@ def test_modules_route_returns_loaded_catalog(client, monkeypatch) -> None:
                     "id": "chat",
                     "route": "chat_core",
                     "label": "Chat",
-                    "description": "Fast primary chat lane on 8082.",
+                    "description": "Primary chat lane on 8081.",
                     "primary_lane": "chat_core",
                     "kind": "core",
                     "selection": "default",

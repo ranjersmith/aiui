@@ -15,15 +15,6 @@
 # - try_run.sh          : LEGACY - Experimental runner, unclear purpose
 # - direct_run.py       : LEGACY - Direct execution script, use verify_all.sh or run_tests.sh
 
-# QWEN-SPECIFIC / EXPERIMENTAL:
-# - qwen_agent_server.py        : EXPERIMENTAL - Standalone Qwen-Agent API (not integrated)
-# - qwen_agent_chat.py          : EXPERIMENTAL - Qwen Agent chat client
-# - qwen_agent_smoke.py         : EXPERIMENTAL - Smoke test for Qwen Agent
-# - setup_qwen3vl_service.sh    : EXPERIMENTAL - Per-host Qwen setup script
-# - setup_qwen25vl_service.sh   : EXPERIMENTAL - Per-host Qwen setup script
-# - switch_to_qwen3coder_stack.sh : EXPERIMENTAL - Model switching script
-# - rename_llama_services.sh    : EXPERIMENTAL - Service naming script
-
 # ANALYSIS & DEBUG SCRIPTS:
 # - bench_llm.py                : DEBUG - LLM performance benchmarking
 # - eval_ab.py                  : DEBUG - A/B evaluation script
@@ -33,7 +24,6 @@
 # - debug_tests.sh              : DEBUG - Test debugging
 # - demo_type_error.py          : DEBUG - Type error demonstration
 # - detailed_bug_report.py      : DEBUG - Bug reporting utility
-# - qwen3_vl_probe.py           : DEBUG - Model probing utility
 # - coding_chat.py              : DEBUG - Coding chat utility
 # - run_budget_test.py          : DEBUG - Budget testing
 

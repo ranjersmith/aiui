@@ -55,7 +55,6 @@ def env_float(key: str, default: float) -> float:
 
 
 LLM_BASE_URL = os.getenv("AIUI_LLM_BASE_URL", "http://host.docker.internal:8081").rstrip("/")
-FAST_LLM_BASE_URL = os.getenv("AIUI_FAST_LLM_BASE_URL", "http://host.docker.internal:8082").rstrip("/")
 DEFAULT_MODEL = os.getenv("AIUI_DEFAULT_MODEL", "Qwen3.5-9B-BF16.gguf")
 REQUEST_TIMEOUT_SECONDS = int(os.getenv("AIUI_REQUEST_TIMEOUT_SECONDS", "120"))
 SYSTEM_PROMPT = os.getenv("AIUI_SYSTEM_PROMPT", "You are a concise, helpful assistant.").strip()
@@ -507,10 +506,8 @@ _CODING_MODES = frozenset({"code", "coding", "coder", "dev", "develop", "agent"}
 
 
 def resolve_llm_base_url(mode: str | None) -> str:
-    """Route coding/agent modes to the heavy coder LLM (8081), everything else to the fast LLM (8082)."""
-    if mode and mode.strip().lower() in _CODING_MODES:
-        return LLM_BASE_URL
-    return FAST_LLM_BASE_URL
+    """Return the single LLM base URL (8081 — Qwen3.5-9B-BF16)."""
+    return LLM_BASE_URL
 
 
 def build_upstream_headers() -> dict[str, str]:
@@ -1387,7 +1384,7 @@ async def probe_upstream() -> tuple[bool, str | None]:
     try:
         async with httpx.AsyncClient(timeout=build_health_timeout()) as client:
             response = await client.get(
-                f"{FAST_LLM_BASE_URL}/v1/models",
+                f"{LLM_BASE_URL}/v1/models",
                 headers=build_upstream_headers(),
             )
             response.raise_for_status()
@@ -1422,7 +1419,6 @@ async def health() -> dict[str, Any]:
         "status": "ok",
         "backend": "llama",
         "llm_base_url": LLM_BASE_URL,
-        "fast_llm_base_url": FAST_LLM_BASE_URL,
         "default_model": DEFAULT_MODEL,
         "upstream_reachable": upstream_ok,
         "upstream_error": upstream_error,
