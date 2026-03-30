@@ -8,6 +8,8 @@ export type RuntimeConfig = {
   temperature: number;
   maxTokens: number;
   systemPrompt: string;
+  toolProfile: "safe" | "minimal" | "trusted" | "all";
+  toolStrategy: "nous" | "qwen_native" | "deepseek";
 };
 
 export type Attachment = {

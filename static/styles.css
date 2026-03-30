@@ -113,6 +113,24 @@ body {
 .sidebar-footer {
   border-top: 1px solid var(--line);
   padding-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.tool-governance {
+  display: grid;
+  gap: 6px;
+}
+
+.tool-governance-label {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tool-governance-select {
+  width: 100%;
 }
 
 .main {
@@ -593,9 +611,27 @@ body {
 
   .sidebar-footer {
     display: flex;
+    flex-wrap: wrap;
     border: none;
     padding: 0;
     gap: 4px;
+  }
+
+  .tool-governance {
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    width: 100%;
+    gap: 6px;
+  }
+
+  .tool-governance-label {
+    font-size: 10px;
+  }
+
+  .tool-governance-select {
+    min-height: 36px;
+    font-size: 12px;
+    padding: 6px 8px;
   }
 
   .sidebar-footer .button {

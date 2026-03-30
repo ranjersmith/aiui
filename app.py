@@ -28,6 +28,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from tools import ToolError, ToolManager, list_strategies
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -55,7 +56,7 @@ def env_float(key: str, default: float) -> float:
 
 LLM_BASE_URL = os.getenv("AIUI_LLM_BASE_URL", "http://host.docker.internal:8081").rstrip("/")
 FAST_LLM_BASE_URL = os.getenv("AIUI_FAST_LLM_BASE_URL", "http://host.docker.internal:8082").rstrip("/")
-DEFAULT_MODEL = os.getenv("AIUI_DEFAULT_MODEL", "Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf")
+DEFAULT_MODEL = os.getenv("AIUI_DEFAULT_MODEL", "Qwen3.5-9B-BF16.gguf")
 REQUEST_TIMEOUT_SECONDS = int(os.getenv("AIUI_REQUEST_TIMEOUT_SECONDS", "120"))
 SYSTEM_PROMPT = os.getenv("AIUI_SYSTEM_PROMPT", "You are a concise, helpful assistant.").strip()
 # CANONICAL MATH DELIMITER CONTRACT: See MATH_DELIMITERS_CONTRACT.json for the contract.
@@ -84,6 +85,9 @@ AGENT_MAX_LLM_CALLS_PER_RUN = env_int("AIUI_AGENT_MAX_LLM_CALLS_PER_RUN", 6)
 AGENT_MAX_TOOL_CALLS_PER_TURN = env_int("AIUI_AGENT_MAX_TOOL_CALLS_PER_TURN", 4)
 AGENT_ENABLE_NON_STREAM_LOOP = env_bool("AIUI_AGENT_ENABLE_NON_STREAM_LOOP", True)
 AGENT_ENABLE_STREAM_LOOP = env_bool("AIUI_AGENT_ENABLE_STREAM_LOOP", True)
+AGENT_TOOL_PROFILE = os.getenv("AIUI_AGENT_TOOL_PROFILE", "safe").strip().lower() or "safe"
+AGENT_TOOL_STRATEGY = os.getenv("AIUI_AGENT_TOOL_STRATEGY", "nous").strip().lower() or "nous"
+AGENT_ENABLED_TOOLS_RAW = os.getenv("AIUI_AGENT_ENABLED_TOOLS", "").strip()
 # SECURITY: Disable doc/ppt external extractors by default to avoid unexpected process spawning.
 # Set AIUI_ENABLE_EXTERNAL_EXTRACTORS=1 to enable catppt, catdoc, antiword extraction.
 ENABLE_EXTERNAL_EXTRACTORS = env_bool("AIUI_ENABLE_EXTERNAL_EXTRACTORS", False)
@@ -99,6 +103,38 @@ PARKER_EVIDENCE_LABEL_RE = re.compile(r"\[E\d+\]")
 PARKER_EVIDENCE_BULLET_RE = re.compile(r"(?mi)^\s*-\s*\[E\d+\]\s+")
 TOOL_CALL_BLOCK_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.IGNORECASE | re.DOTALL)
 _MODULE_CATALOG_CACHE: dict[str, Any] = {"expires_at": 0.0, "body": None}
+DEFAULT_AGENT_TOOL_NAMES = [
+    "get_current_time",
+    "calculator",
+    "search_conversation",
+    "read_file",
+    "write_file",
+    "grep_search",
+    "file_glob_search",
+    "exec_shell_command",
+    "edit_file",
+    "apply_diff",
+]
+SAFE_AGENT_TOOL_NAMES = [
+    "get_current_time",
+    "calculator",
+    "search_conversation",
+    "read_file",
+    "grep_search",
+    "file_glob_search",
+]
+MINIMAL_AGENT_TOOL_NAMES = [
+    "get_current_time",
+    "calculator",
+    "search_conversation",
+]
+AGENT_TOOL_PROFILES: dict[str, list[str] | None] = {
+    "safe": SAFE_AGENT_TOOL_NAMES,
+    "minimal": MINIMAL_AGENT_TOOL_NAMES,
+    "trusted": None,
+    "all": None,
+}
+AGENT_ALLOWED_STRATEGIES = set(list_strategies())
 TEXT_DOCUMENT_EXTENSIONS = {
     ".txt",
     ".md",
@@ -123,81 +159,96 @@ WORDPROCESSINGML_NAMESPACE = {"w": "http://schemas.openxmlformats.org/wordproces
 DRAWINGML_TEXT_TAG = "{http://schemas.openxmlformats.org/drawingml/2006/main}t"
 
 
-def build_agent_tool_specs() -> list[dict[str, Any]]:
-    return [
-        {
-            "name": "get_current_time",
-            "description": "Get the current date and time. Optionally provide a timezone like UTC, America/New_York, Europe/London, or Asia/Tokyo.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "timezone": {
-                        "type": "string",
-                        "description": "IANA timezone name, e.g., UTC or America/New_York",
-                    }
-                },
-                "required": [],
-            },
-        },
-        {
-            "name": "calculator",
-            "description": "Evaluate a safe arithmetic expression using +, -, *, /, //, %, and **.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "expression": {
-                        "type": "string",
-                        "description": "Arithmetic expression such as (12 + 5) * 3 / 2",
-                    }
-                },
-                "required": ["expression"],
-            },
-        },
-        {
-            "name": "search_conversation",
-            "description": "Search prior conversation turns and return the most relevant snippets.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Keywords to search in prior conversation turns",
-                    },
-                    "max_results": {
-                        "type": "integer",
-                        "description": "Maximum number of snippets to return",
-                    },
-                },
-                "required": ["query"],
-            },
-        },
-    ]
+def _parse_enabled_tool_names(raw: str) -> list[str] | None:
+    value = str(raw or "").strip()
+    if not value:
+        return None
+    if value.lower() in {"all", "trusted"}:
+        return None
+    names = [item.strip() for item in value.split(",") if item.strip()]
+    return names or None
 
 
-def build_nous_tools_instruction(tool_specs: list[dict[str, Any]]) -> str:
-    tool_descs = "\n".join(
-        json.dumps({"type": "function", "function": spec}, ensure_ascii=False) for spec in tool_specs
+def _strategy_or_default(value: str | None, default: str) -> str:
+    candidate = str(value or "").strip().lower()
+    if candidate in AGENT_ALLOWED_STRATEGIES:
+        return candidate
+    return default
+
+
+def _profile_or_default(value: str | None, default: str) -> str:
+    candidate = str(value or "").strip().lower()
+    if candidate in AGENT_TOOL_PROFILES:
+        return candidate
+    return default
+
+
+def _resolve_tool_names(profile: str, enabled_tools_raw: str) -> list[str] | None:
+    explicit = _parse_enabled_tool_names(enabled_tools_raw)
+    if explicit is not None:
+        return explicit
+    profile_names = AGENT_TOOL_PROFILES.get(profile)
+    if profile_names is None:
+        return None
+    return list(profile_names)
+
+
+def _init_tool_manager(
+    *,
+    profile: str | None = None,
+    strategy: str | None = None,
+    enabled_tools_raw: str | None = None,
+) -> ToolManager:
+    resolved_profile = _profile_or_default(profile, AGENT_TOOL_PROFILE)
+    resolved_strategy = _strategy_or_default(strategy, AGENT_TOOL_STRATEGY)
+    names = _resolve_tool_names(resolved_profile, enabled_tools_raw or AGENT_ENABLED_TOOLS_RAW)
+    try:
+        return ToolManager(tool_names=names, strategy=resolved_strategy)
+    except Exception:
+        fallback_names = names or AGENT_TOOL_PROFILES["safe"] or DEFAULT_AGENT_TOOL_NAMES
+        try:
+            return ToolManager(tool_names=fallback_names, strategy="nous")
+        except Exception:
+            return ToolManager(tool_names=["get_current_time", "calculator", "search_conversation"], strategy="nous")
+
+
+AGENT_TOOL_MANAGER = _init_tool_manager(
+    profile=AGENT_TOOL_PROFILE,
+    strategy=AGENT_TOOL_STRATEGY,
+    enabled_tools_raw=AGENT_ENABLED_TOOLS_RAW,
+)
+
+
+def resolve_tool_manager_for_request(req: "ChatRequest") -> ToolManager:
+    return _init_tool_manager(
+        profile=req.agent_tool_profile,
+        strategy=req.agent_tool_strategy,
+        enabled_tools_raw=req.agent_enabled_tools,
     )
-    return (
-        "# Tools\n\n"
-        "You may call one or more functions to assist with the user query.\n\n"
-        "You are provided with function signatures within <tools></tools> XML tags:\n"
-        "<tools>\n"
-        f"{tool_descs}\n"
-        "</tools>\n\n"
-        "For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n"
-        "<tool_call>\n"
-        '{"name": <function-name>, "arguments": <args-json-object>}\n'
-        "</tool_call>"
-    )
 
 
-def inject_tools_into_messages(messages: list[dict[str, Any]], tool_specs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_agent_tool_specs(tool_manager: ToolManager | None = None) -> list[dict[str, Any]]:
+    manager = tool_manager or AGENT_TOOL_MANAGER
+    return [schema.get("function", {}) for schema in manager.get_tool_schemas()]
+
+
+def build_nous_tools_instruction(tool_specs: list[dict[str, Any]], tool_manager: ToolManager | None = None) -> str:
+    _ = tool_specs
+    manager = tool_manager or AGENT_TOOL_MANAGER
+    return manager.get_tools_instruction()
+
+
+def inject_tools_into_messages(
+    messages: list[dict[str, Any]],
+    tool_specs: list[dict[str, Any]],
+    tool_manager: ToolManager | None = None,
+) -> list[dict[str, Any]]:
     if not tool_specs:
         return messages
 
     out = copy.deepcopy(messages)
-    tool_instruction = build_nous_tools_instruction(tool_specs)
+    manager = tool_manager or AGENT_TOOL_MANAGER
+    tool_instruction = manager.get_tools_instruction()
 
     if out and out[0].get("role") == "system":
         current = str(out[0].get("content") or "")
@@ -233,15 +284,27 @@ def _parse_tool_call_payload(raw_payload: str) -> tuple[str, dict[str, Any]] | N
     return name, arguments
 
 
-def parse_assistant_tool_calls(text: str) -> tuple[list[tuple[str, dict[str, Any]]], str]:
+def parse_assistant_tool_calls(
+    text: str,
+    tool_manager: ToolManager | None = None,
+) -> tuple[list[tuple[str, dict[str, Any]]], str]:
     if not text:
         return [], ""
 
     calls: list[tuple[str, dict[str, Any]]] = []
-    for match in TOOL_CALL_BLOCK_RE.finditer(text):
-        parsed = _parse_tool_call_payload(match.group(1))
-        if parsed is not None:
-            calls.append(parsed)
+    manager = tool_manager or AGENT_TOOL_MANAGER
+    parsed_calls = manager.parse_tool_calls(text)
+    for call in parsed_calls:
+        name = str(call.get("name") or "").strip()
+        args = call.get("arguments")
+        if name and isinstance(args, dict):
+            calls.append((name, args))
+
+    if not calls:
+        for match in TOOL_CALL_BLOCK_RE.finditer(text):
+            parsed = _parse_tool_call_payload(match.group(1))
+            if parsed is not None:
+                calls.append(parsed)
 
     visible_text = TOOL_CALL_BLOCK_RE.sub("", text).strip()
     return calls, visible_text
@@ -318,66 +381,33 @@ def execute_agent_tool(
     tool_name: str,
     tool_args: dict[str, Any],
     messages: list[dict[str, Any]],
+    tool_manager: ToolManager | None = None,
 ) -> dict[str, Any]:
-    if tool_name == "get_current_time":
-        timezone_name = str(tool_args.get("timezone") or "UTC").strip() or "UTC"
-        try:
-            tz = ZoneInfo(timezone_name)
-        except ZoneInfoNotFoundError:
-            timezone_name = "UTC"
-            tz = timezone.utc
-        now = datetime.now(tz)
-        return {
-            "timezone": timezone_name,
-            "iso": now.isoformat(),
-            "readable": now.strftime("%A, %d %B %Y, %H:%M:%S %Z"),
-        }
-
-    if tool_name == "calculator":
-        expression = str(tool_args.get("expression") or "").strip()
-        if not expression:
-            return {"error": "expression is required"}
-        try:
-            value = safe_eval_arithmetic(expression)
-            return {"expression": expression, "result": value}
-        except Exception as exc:
-            return {"expression": expression, "error": str(exc)}
-
+    kwargs = dict(tool_args or {})
     if tool_name == "search_conversation":
-        query = str(tool_args.get("query") or "").strip().lower()
-        if not query:
-            return {"error": "query is required"}
+        kwargs["conversation_messages"] = messages
+    manager = tool_manager or AGENT_TOOL_MANAGER
+    try:
+        raw_result = manager.execute_tool(tool_name, **kwargs)
+    except ToolError as exc:
+        return {"error": f"{exc.code}: {exc.message}"}
+    except Exception as exc:
+        return {"error": str(exc)}
 
-        max_results = max(1, min(10, as_int(tool_args.get("max_results") or 3)))
-        scored: list[tuple[int, dict[str, Any]]] = []
-        query_terms = [term for term in re.split(r"\s+", query) if term]
-        for msg in messages:
-            if not isinstance(msg, dict):
-                continue
-            text = extract_summary_text(msg.get("content"))
-            normalized = text.lower()
-            if not normalized:
-                continue
-            score = sum(1 for term in query_terms if term in normalized)
-            if score <= 0:
-                continue
-            scored.append(
-                (
-                    score,
-                    {
-                        "role": str(msg.get("role") or ""),
-                        "snippet": compact_text(text, 280),
-                    },
-                )
-            )
-        scored.sort(key=lambda item: item[0], reverse=True)
-        return {
-            "query": query,
-            "matches": [item[1] for item in scored[:max_results]],
-            "count": len(scored),
-        }
-
-    return {"error": f"unknown tool: {tool_name}"}
+    if isinstance(raw_result, str):
+        text = raw_result.strip()
+        if not text:
+            return {"result": ""}
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return {"result": text}
+        if isinstance(parsed, dict):
+            return parsed
+        return {"result": parsed}
+    if isinstance(raw_result, dict):
+        return raw_result
+    return {"result": raw_result}
 
 
 def make_tool_response_message(tool_result: dict[str, Any]) -> dict[str, str]:
@@ -396,9 +426,10 @@ async def run_agent_non_stream(
     mode: str | None,
     temperature: float,
     max_tokens: int | None,
+    tool_manager: ToolManager,
 ) -> str:
-    tool_specs = build_agent_tool_specs()
-    working_messages = inject_tools_into_messages(messages, tool_specs)
+    tool_specs = build_agent_tool_specs(tool_manager)
+    working_messages = inject_tools_into_messages(messages, tool_specs, tool_manager)
 
     last_visible_text = ""
     for _ in range(max(1, AGENT_MAX_LLM_CALLS_PER_RUN)):
@@ -409,7 +440,7 @@ async def run_agent_non_stream(
             temperature=temperature,
             max_tokens=max_tokens,
         )
-        tool_calls, visible_text = parse_assistant_tool_calls(assistant_text)
+        tool_calls, visible_text = parse_assistant_tool_calls(assistant_text, tool_manager)
         if visible_text:
             last_visible_text = visible_text
 
@@ -424,6 +455,7 @@ async def run_agent_non_stream(
                 tool_name=tool_name,
                 tool_args=tool_args,
                 messages=working_messages,
+                tool_manager=tool_manager,
             )
             wrapped_result = {
                 "tool": tool_name,
@@ -462,6 +494,9 @@ class ChatRequest(BaseModel):
     stream: bool = True
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: int | None = Field(default=None, ge=1, le=32768)
+    agent_tool_profile: str | None = Field(default=None, max_length=32)
+    agent_tool_strategy: str | None = Field(default=None, max_length=32)
+    agent_enabled_tools: str | None = Field(default=None, max_length=4000)
 
 
 def sse_event(payload: dict[str, Any]) -> str:
@@ -1392,6 +1427,10 @@ async def health() -> dict[str, Any]:
         "upstream_reachable": upstream_ok,
         "upstream_error": upstream_error,
         "context_budget_tokens": CONTEXT_BUDGET_TOKENS,
+        "agent_tool_profile": AGENT_TOOL_PROFILE,
+        "agent_tool_strategy": AGENT_TOOL_STRATEGY,
+        "agent_tool_count": len(AGENT_TOOL_MANAGER.tool_names),
+        "agent_tools": list(AGENT_TOOL_MANAGER.tool_names),
     }
 
 
@@ -1412,6 +1451,7 @@ async def chat(req: ChatRequest):
         raise HTTPException(status_code=400, detail="message, image, or document is required")
 
     module_catalog = await load_module_catalog()
+    request_tool_manager = resolve_tool_manager_for_request(req)
     model = (req.model or DEFAULT_MODEL).strip() or DEFAULT_MODEL
     mode, upstream_mode = resolve_request_mode(req.mode, module_catalog)
     payload_messages = build_payload_messages(req, mode=mode)
@@ -1425,6 +1465,7 @@ async def chat(req: ChatRequest):
                     mode=upstream_mode,
                     temperature=req.temperature,
                     max_tokens=req.max_tokens,
+                    tool_manager=request_tool_manager,
                 )
             else:
                 answer = await call_llm_chat(
@@ -1442,8 +1483,12 @@ async def chat(req: ChatRequest):
         usage: dict[str, Any] = {}
         started_at = time.perf_counter()
         streamed_content_parts: list[str] = []
-        tool_specs = build_agent_tool_specs() if AGENT_ENABLE_STREAM_LOOP else []
-        agent_messages = inject_tools_into_messages(payload_messages, tool_specs) if tool_specs else payload_messages
+        tool_specs = build_agent_tool_specs(request_tool_manager) if AGENT_ENABLE_STREAM_LOOP else []
+        agent_messages = (
+            inject_tools_into_messages(payload_messages, tool_specs, request_tool_manager)
+            if tool_specs
+            else payload_messages
+        )
         try:
             yield sse_event({"type": "meta", "model": model})
             max_turns = max(1, AGENT_MAX_LLM_CALLS_PER_RUN if AGENT_ENABLE_STREAM_LOOP else 1)
@@ -1501,7 +1546,10 @@ async def chat(req: ChatRequest):
                     yield sse_event({"type": "token", "delta": remaining_visible_text})
 
                 assistant_turn_raw = "".join(assistant_turn_raw_parts)
-                parsed_tool_calls, _visible_assistant_text = parse_assistant_tool_calls(assistant_turn_raw)
+                parsed_tool_calls, _visible_assistant_text = parse_assistant_tool_calls(
+                    assistant_turn_raw,
+                    request_tool_manager,
+                )
 
                 if len(parsed_tool_calls) > len(turn_emitted_tool_calls):
                     for tool_name, tool_args in parsed_tool_calls[len(turn_emitted_tool_calls) :]:
@@ -1516,6 +1564,7 @@ async def chat(req: ChatRequest):
                         tool_name=tool_name,
                         tool_args=tool_args,
                         messages=agent_messages,
+                        tool_manager=request_tool_manager,
                     )
                     wrapped_result = {
                         "tool": tool_name,

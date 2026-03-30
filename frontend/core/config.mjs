@@ -1,10 +1,12 @@
 const DEFAULT_CONFIG = {
   provider: "openai",
-  baseUrl: "http://localhost:8081",
-  model: "Qwen/Qwen3-VL-8B-Instruct",
+  baseUrl: "/llm",
+  model: "Qwen3.5-9B-BF16.gguf",
   temperature: 0.3,
   maxTokens: 4096,
   systemPrompt: "",
+  toolProfile: "safe",
+  toolStrategy: "nous",
 };
 
 export function readConfig() {
@@ -20,6 +22,14 @@ export function readConfig() {
       ? Number(cfg.maxTokens)
       : DEFAULT_CONFIG.maxTokens,
     systemPrompt: typeof cfg.systemPrompt === "string" ? cfg.systemPrompt : DEFAULT_CONFIG.systemPrompt,
+    toolProfile:
+      typeof cfg.toolProfile === "string" && ["safe", "minimal", "trusted", "all"].includes(cfg.toolProfile)
+        ? cfg.toolProfile
+        : DEFAULT_CONFIG.toolProfile,
+    toolStrategy:
+      typeof cfg.toolStrategy === "string" && ["nous", "qwen_native", "deepseek"].includes(cfg.toolStrategy)
+        ? cfg.toolStrategy
+        : DEFAULT_CONFIG.toolStrategy,
   };
 }
 

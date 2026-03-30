@@ -302,6 +302,8 @@ function App() {
   const [isStreaming, setIsStreaming] = createSignal(false);
   const [status, setStatus] = createSignal("idle");
   const [activeModel, setActiveModel] = createSignal(config().model);
+  const [toolProfile, setToolProfile] = createSignal(config().toolProfile);
+  const [toolStrategy, setToolStrategy] = createSignal(config().toolStrategy);
   const [firstTokenLatencyMs, setFirstTokenLatencyMs] = createSignal<number | null>(null);
   const [flushesPerSecond, setFlushesPerSecond] = createSignal(0);
   const [tokenCount, setTokenCount] = createSignal(0);
@@ -407,6 +409,8 @@ function App() {
       baseUrl: config().baseUrl,
       model: config().model,
       provider: config().provider,
+      toolProfile: config().toolProfile,
+      toolStrategy: config().toolStrategy,
     });
     window.setTimeout(() => {
       void runProxyHealthCheck("startup");
@@ -629,8 +633,13 @@ function App() {
 
     try {
       const provider = providerFor(config());
+      const runtimeConfig = {
+        ...config(),
+        toolProfile: toolProfile(),
+        toolStrategy: toolStrategy(),
+      };
       await provider({
-        config: config(),
+        config: runtimeConfig,
         userText: text,
         history,
         attachments,
@@ -819,6 +828,39 @@ function App() {
         </div>
         <div class="chat-list" aria-hidden="true"></div>
         <div class="sidebar-footer">
+          <div class="tool-governance">
+            <label class="tool-governance-label" for="tool-profile">tool profile</label>
+            <select
+              id="tool-profile"
+              class="input tool-governance-select"
+              value=${toolProfile}
+              onChange=${(event: Event) => {
+                const target = event.currentTarget as HTMLSelectElement;
+                setToolProfile(target.value as "safe" | "minimal" | "trusted" | "all");
+              }}
+              disabled=${isStreaming}
+            >
+              <option value="safe">safe</option>
+              <option value="minimal">minimal</option>
+              <option value="trusted">trusted</option>
+              <option value="all">all</option>
+            </select>
+            <label class="tool-governance-label" for="tool-strategy">tool strategy</label>
+            <select
+              id="tool-strategy"
+              class="input tool-governance-select"
+              value=${toolStrategy}
+              onChange=${(event: Event) => {
+                const target = event.currentTarget as HTMLSelectElement;
+                setToolStrategy(target.value as "nous" | "qwen_native" | "deepseek");
+              }}
+              disabled=${isStreaming}
+            >
+              <option value="nous">nous</option>
+              <option value="qwen_native">qwen native</option>
+              <option value="deepseek">deepseek</option>
+            </select>
+          </div>
           <button class="button" onClick=${clearChat} disabled=${isStreaming}>clear</button>
         </div>
       </aside>

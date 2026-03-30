@@ -12,7 +12,7 @@ VISION_SERVICE="llama@${VISION_INSTANCE}.service"
 TEXT_ENV="/etc/llama/${TEXT_INSTANCE}.env"
 TEXT_ENV_BAK="/etc/llama/${TEXT_INSTANCE}.env.bak.$(date +%Y%m%d_%H%M%S)"
 
-TEXT_MODEL="/home/ra/models/Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf"
+TEXT_MODEL="/home/ra/models/Qwen3.5-9B-BF16.gguf"
 VISION_MODEL="/home/ra/models/Qwen3-VL-4B-Instruct-UD-Q6_K_XL.gguf"
 VISION_MMPROJ="/home/ra/models/mmproj-Qwen3-VL-4B-F16.gguf"
 
@@ -37,18 +37,24 @@ sudo -v
 echo "Backing up current env: $TEXT_ENV -> $TEXT_ENV_BAK"
 sudo cp "$TEXT_ENV" "$TEXT_ENV_BAK"
 
-echo "Writing $TEXT_ENV for Qwen3-Coder on port 8081"
+echo "Writing $TEXT_ENV for Qwen3.5-9B-BF16 on port 8081"
 sudo tee "$TEXT_ENV" >/dev/null <<'EOT'
 SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
-LLAMA_ARGS="-m /home/ra/models/Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf \
---ctx-size 131072 \
+LLAMA_ARGS="-m /home/ra/models/Qwen3.5-9B-BF16.gguf \
+--gpu-layers 99 \
+--flash-attn on \
+--ctx-size 32768 \
+--cache-type-k q8_0 --cache-type-v q8_0 \
 --host 0.0.0.0 --port 8081 \
---threads 5 --threads-batch 5 --threads-http 2 \
+--threads 6 --threads-batch 6 --threads-http 2 \
 --parallel 1 --cont-batching \
---temp 1.0 --top-p 0.95 --top-k 20 --min-p 0.0 \
+--batch-size 4096 --ubatch-size 1024 \
+--temp 0.7 --top-p 0.8 --top-k 20 --min-p 0.0 --presence-penalty 1.5 --repeat-penalty 1.0 \
+--n-predict 32768 \
+--reasoning off \
 --reasoning-format none \
---chat-template-kwargs {\"enable_thinking\":false} \
+--tools all \
 --metrics --no-webui"
 EOT
 

@@ -90,6 +90,8 @@ export const streamOpenAiCompatible: StreamProvider = async ({
         stream_options: { include_usage: true },
         temperature: config.temperature,
         max_tokens: config.maxTokens,
+        agent_tool_profile: config.toolProfile,
+        agent_tool_strategy: config.toolStrategy,
       }),
       signal,
     });

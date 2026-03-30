@@ -1,7 +1,7 @@
 /**
  * Minimal static file server replacing nginx for the aiui frontend.
  * Files live at /app/static/; browser paths use the /static/ prefix.
- * Proxies /llm/* to the LLM server (http://qwen3vl-rocm:8000 by default).
+ * Proxies /llm/* to the LLM server (http://host.docker.internal:8081 by default).
  * Reads PORT env (default 8080).
  */
 import { createServer } from "node:http";
@@ -12,7 +12,7 @@ import { extname, join, resolve } from "node:path";
 
 const PORT = parseInt(process.env.PORT || "8080", 10);
 const ROOT = resolve("/app/static");
-const LLM_BACKEND = process.env.LLM_BACKEND_URL || "http://qwen3vl-rocm:8000";
+const LLM_BACKEND = process.env.LLM_BACKEND_URL || "http://host.docker.internal:8081";
 
 console.log(`[aiui] using LLM backend: ${LLM_BACKEND}`);
 

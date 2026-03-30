@@ -56,7 +56,7 @@ Container env vars (see `docker-compose.frontend.yml`):
 
 - `LLM_UI_PROVIDER`: `openai` (default) — OpenAI-compatible API mode
 - `LLM_UI_BASE_URL`: The **browser**-facing URL for the LLM API proxy (default: `/llm` for same-origin, or full URL like `http://your-host:8081`)
-- `LLM_UI_MODEL`: Model name sent to the upstream API
+- `LLM_UI_MODEL`: Model name sent to the upstream API (default: `Qwen3.5-9B-BF16.gguf` for the local llama.cpp service on `:8081`)
 - `LLM_UI_TEMPERATURE`: Sampling temperature
 - `LLM_UI_MAX_TOKENS`: Max completion length
 - `LLM_UI_SYSTEM_PROMPT`: Optional system prompt override
