@@ -1,34 +1,39 @@
-#!/usr/bin/env bash
-# Script Organization and Classification for aiui/scripts/
+# Scripts Overview
 
-# CANONICAL / PRODUCTION SCRIPTS:
-# - verify_all.sh       : CANONICAL - Primary verification script for CI/lint/test
-# - stack.sh            : CANONICAL - Docker compose orchestration (frontend)
-# - build_frontend.mjs  : CANONICAL - Frontend build pipeline
-# - run_tests.sh        : CANONICAL - Primary test runner with pytest coverage
+This directory contains operational, test, and diagnostic scripts for the aiui stack.
 
-# LEGACY / EXPERIMENTAL SCRIPTS (prefer canonical equivalents or verify_all.sh):
-# - run_test.sh         : LEGACY - Single test runner, replaced by run_tests.sh
-# - test_run.sh         : LEGACY - Test runner variant, prefer run_tests.sh or verify_all.sh
-# - test_script.sh      : LEGACY - Experimental/debug script, use verify_all.sh
-# - simple_test.sh      : LEGACY - Basic test runner, replaced by verify_all.sh
-# - try_run.sh          : LEGACY - Experimental runner, unclear purpose
-# - direct_run.py       : LEGACY - Direct execution script, use verify_all.sh or run_tests.sh
+## Canonical Production Scripts
 
-# ANALYSIS & DEBUG SCRIPTS:
-# - bench_llm.py                : DEBUG - LLM performance benchmarking
-# - eval_ab.py                  : DEBUG - A/B evaluation script
-# - eval_frontdoor.py           : DEBUG - FrontDoor evaluation
-# - monitor_math_output.mjs     : DEBUG - Math output monitoring
-# - debug_budget_analysis.py    : DEBUG - Budget analysis
-# - debug_tests.sh              : DEBUG - Test debugging
-# - demo_type_error.py          : DEBUG - Type error demonstration
-# - detailed_bug_report.py      : DEBUG - Bug reporting utility
-# - coding_chat.py              : DEBUG - Coding chat utility
-# - run_budget_test.py          : DEBUG - Budget testing
+- `verify_all.sh`: primary verification script for CI, lint, and tests.
+- `stack.sh`: Docker compose orchestration for frontend services.
+- `build_frontend.mjs`: frontend build pipeline.
+- `run_tests.sh`: primary pytest runner.
 
-# ENVIRONMENT SETUP:
-# - venv_check.sh       : UTILITY - Check Python venv state
-# - setup_test_env.sh   : UTILITY - Initialize test environment
+## Legacy or Experimental Scripts
 
-echo "Script classification complete. See above for organization."
+Prefer canonical equivalents when possible.
+
+- `run_test.sh`: single-test runner, replaced by `run_tests.sh`.
+- `test_run.sh`: legacy test runner variant.
+- `test_script.sh`: experimental or debug runner.
+- `simple_test.sh`: legacy basic test runner.
+- `try_run.sh`: experimental runner with unclear purpose.
+- `direct_run.py`: direct execution helper, prefer canonical scripts.
+
+## Analysis and Debug Scripts
+
+- `bench_llm.py`: LLM performance benchmarking.
+- `eval_ab.py`: A/B evaluation helper.
+- `eval_frontdoor.py`: FrontDoor evaluation script.
+- `monitor_math_output.mjs`: math output monitoring.
+- `debug_budget_analysis.py`: budget analysis.
+- `debug_tests.sh`: test debugging helper.
+- `demo_type_error.py`: type error demonstration script.
+- `detailed_bug_report.py`: bug report utility.
+- `coding_chat.py`: coding chat utility.
+- `run_budget_test.py`: budget testing helper.
+
+## Environment Setup Scripts
+
+- `venv_check.sh`: check Python virtual environment state.
+- `setup_test_env.sh`: initialize the local test environment.

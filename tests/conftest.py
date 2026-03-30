@@ -46,3 +46,10 @@ def stub_module_catalog(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     app_module._MODULE_CATALOG_CACHE["body"] = None
     app_module._MODULE_CATALOG_CACHE["expires_at"] = 0.0
     yield
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limit_state() -> Iterator[None]:
+    app_module._REQUEST_TIMESTAMPS.clear()
+    yield
+    app_module._REQUEST_TIMESTAMPS.clear()

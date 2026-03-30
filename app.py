@@ -7,6 +7,7 @@ import binascii
 import copy
 import io
 import json
+import logging
 import math
 import mimetypes
 import operator
@@ -31,6 +32,7 @@ from pydantic import BaseModel, Field
 from tools import ToolError, ToolManager, list_strategies
 
 BASE_DIR = Path(__file__).resolve().parent
+logger = logging.getLogger(__name__)
 
 
 def env_bool(key: str, default: bool = False) -> bool:
@@ -203,11 +205,21 @@ def _init_tool_manager(
     names = _resolve_tool_names(resolved_profile, enabled_tools_raw or AGENT_ENABLED_TOOLS_RAW)
     try:
         return ToolManager(tool_names=names, strategy=resolved_strategy)
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "ToolManager init failed; using safe fallback profile=%s strategy=%s error=%s",
+            resolved_profile,
+            resolved_strategy,
+            str(exc),
+        )
         fallback_names = names or AGENT_TOOL_PROFILES["safe"] or DEFAULT_AGENT_TOOL_NAMES
         try:
             return ToolManager(tool_names=fallback_names, strategy="nous")
-        except Exception:
+        except Exception as fallback_exc:
+            logger.error(
+                "ToolManager safe fallback failed; using minimal fallback error=%s",
+                str(fallback_exc),
+            )
             return ToolManager(tool_names=["get_current_time", "calculator", "search_conversation"], strategy="nous")
 
 
@@ -1240,12 +1252,28 @@ def apply_context_budget(
 ) -> list[dict[str, Any]]:
     if budget_tokens <= 0 or not messages:
         return messages
+
+    # Keep leading system messages pinned so safety/format instructions are not
+    # trimmed away by downstream budgeting.
+    lead_system: list[dict[str, Any]] = []
+    remaining = list(messages)
+    while remaining and str(remaining[0].get("role") or "").strip().lower() == "system":
+        lead_system.append(remaining.pop(0))
+
+    if not remaining:
+        return lead_system
+
+    system_tokens = estimate_messages_tokens(lead_system) if lead_system else 0
+    remaining_budget = max(0, budget_tokens - system_tokens)
+    if remaining_budget <= 0:
+        return lead_system + [remaining[-1]]
+
     kept, _dropped = split_messages_by_context_budget(
-        messages,
-        budget_tokens=budget_tokens,
+        remaining,
+        budget_tokens=remaining_budget,
         reserve_tokens=reserve_tokens,
     )
-    return kept
+    return lead_system + kept
 
 
 def as_int(value: Any) -> int:

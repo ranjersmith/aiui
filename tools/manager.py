@@ -112,16 +112,23 @@ class ToolManager:
         Returns:
             dict: Results keyed by tool name: {"tool_name": "result", ...}
         """
-        results = {}
+        results: Dict[str, Any] = {}
+        seen_counts: Dict[str, int] = {}
         for call in tool_calls:
             tool_name = call.get("name")
             arguments = call.get("arguments", {})
+            label = str(tool_name or "unknown_tool")
+            count = seen_counts.get(label, 0)
+            seen_counts[label] = count + 1
+            # Preserve backward compatibility for the first occurrence while
+            # avoiding overwrite when the same tool is called multiple times.
+            result_key = label if count == 0 else f"{label}#{count + 1}"
             
             try:
                 result = self.execute_tool(tool_name, **arguments)
-                results[tool_name] = result
+                results[result_key] = result
             except ToolError as e:
-                results[tool_name] = f"Error: {e.message}"
+                results[result_key] = f"Error: {e.message}"
         
         return results
 
