@@ -19,6 +19,18 @@ import {
 import { providerFor } from "./providers";
 import type { Attachment, ChatMessage, StreamHandlers } from "./core/types";
 
+/** Strip <think>...</think> blocks from assistant content for display. */
+function stripThinkBlocks(text: string): string {
+  return text.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim();
+}
+
+/** Check if content has an unclosed <think> tag (still streaming thinking). */
+function hasUnclosedThinkBlock(text: string): boolean {
+  const opens = (text.match(/<think>/g) || []).length;
+  const closes = (text.match(/<\/think>/g) || []).length;
+  return opens > closes;
+}
+
 const MAX_RENDERED_MESSAGES = 120;
 const MAX_MARKDOWN_CACHE_SIZE = 500;
 const STREAM_FLUSH_INTERVAL_MS = 80;
@@ -528,10 +540,20 @@ function App() {
         const rate = Math.round((tokenCount() * 1000) / Math.max(elapsedMs, 1));
         setTokensPerSecond(rate);
         pendingDelta += delta;
-        const preview = renderStreamingPreview(assistantTailTextWithPending());
+        const fullText = assistantTailTextWithPending();
+
+        // Handle <think> blocks: show status while thinking, strip for display
+        if (hasUnclosedThinkBlock(fullText)) {
+          setStatus("thinking...");
+          scheduleFlush();
+          return;
+        }
+
+        const displayText = stripThinkBlocks(fullText);
+        const preview = renderStreamingPreview(displayText);
         setStreamingPreview(preview);
         setRenderTrace(preview.trace);
-        const diag = buildNotationDiagnostics(assistantTailTextWithPending(), "streaming", null);
+        const diag = buildNotationDiagnostics(displayText, "streaming", null);
         setNotationDiagnostics(diag);
         const now = performance.now();
         if (now - lastMonitorLogAtMs >= 750) {
@@ -544,10 +566,23 @@ function App() {
       onDone: (summary) => {
         cancelScheduledFlush();
         flushPendingDelta();
-        const finalRendered = renderMessageMarkdown(assistantTailTextWithPending());
+
+        // Strip <think> blocks from final content and update stored message
+        const rawContent = assistantTailTextWithPending();
+        const displayContent = stripThinkBlocks(rawContent);
+        setMessages((prev) => {
+          const next = [...prev];
+          const last = next[next.length - 1];
+          if (last?.role === "assistant") {
+            next[next.length - 1] = { ...last, content: displayContent };
+          }
+          return next;
+        });
+
+        const finalRendered = renderMessageMarkdown(displayContent);
         setStreamingPreview(null);
         setRenderTrace(finalRendered.trace);
-        const diag = buildNotationDiagnostics(assistantTailTextWithPending(), "final", finalRendered.fallbackReason);
+        const diag = buildNotationDiagnostics(displayContent, "final", finalRendered.fallbackReason);
         setNotationDiagnostics(diag);
         logNotationDiagnostics(diag);
         logRenderTrace(finalRendered.trace);

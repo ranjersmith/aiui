@@ -2,6 +2,11 @@ import { normalizeBaseUrl } from "../core/config.mjs";
 import { parseSseBuffer, buildErrorMessage } from "../core/sse.mjs";
 import type { Attachment, StreamProvider } from "../core/types";
 
+/** Strip <think>...</think> blocks from text (Qwen best practice: no thinking content in history). */
+function stripThinkBlocks(text: string): string {
+  return text.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim();
+}
+
 type ContentPart =
   | { type: "text"; text: string }
   | { type: "image_url"; image_url: { url: string } };
@@ -66,7 +71,9 @@ export const streamOpenAiCompatible: StreamProvider = async ({
   const messages = [
     ...history.map((msg) => ({
       role: msg.role,
-      content: buildHistoryContent(msg.content, msg.attachments),
+      content: msg.role === "assistant"
+        ? stripThinkBlocks(buildHistoryContent(msg.content, msg.attachments) as string)
+        : buildHistoryContent(msg.content, msg.attachments),
     })),
     { role: "user", content: buildUserContent(userText, attachments) },
   ];

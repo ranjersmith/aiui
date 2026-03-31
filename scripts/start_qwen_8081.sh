@@ -32,8 +32,8 @@ nohup "$LLAMA_SERVER_BIN" \
   --parallel 1 --cont-batching \
   --batch-size 4096 --ubatch-size 1024 \
   --temp 0.7 --top-p 0.8 --top-k 20 --min-p 0.0 --presence-penalty 1.5 --repeat-penalty 1.0 \
-  --n-predict 32768 \
-  --reasoning off --reasoning-format none \
+  --n-predict 81920 \
+  --reasoning-format deepseek \
   --tools all \
   --metrics --no-webui \
   >"$LOG_FILE" 2>&1 &

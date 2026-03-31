@@ -61,18 +61,16 @@ DEFAULT_MODEL = os.getenv("AIUI_DEFAULT_MODEL", "Qwen3.5-9B-BF16.gguf")
 REQUEST_TIMEOUT_SECONDS = int(os.getenv("AIUI_REQUEST_TIMEOUT_SECONDS", "120"))
 SYSTEM_PROMPT = os.getenv("AIUI_SYSTEM_PROMPT", "You are a concise, helpful assistant.").strip()
 # CANONICAL MATH DELIMITER CONTRACT: See MATH_DELIMITERS_CONTRACT.json for the contract.
-# Backend guidance: Use \(...\) for inline math, $$...$$ for display math.
+# Backend guidance: Use $...$ for inline math, $$...$$ for display math (KaTeX-compatible).
 RESPONSE_FORMAT_GUIDANCE = (
     "Response format requirements:\n"
     "- Return valid Markdown.\n"
-    "- Use \\(...\\) for inline math (canonical delimiter). Never use single $.\n"
-    "- Use $$...$$ for display math.\n"
+    "- Use $...$ for inline math. Use $$...$$ for display math.\n"
     "- Every math delimiter must be balanced and closed.\n"
-    "- Before finishing, verify there are no unmatched $, $$, \\(, or \\).\n"
+    "- Before finishing, verify there are no unmatched $ or $$.\n"
     "- Do not place LaTeX outside math delimiters.\n"
     "- Do not wrap equations in bold or italics.\n"
     "- Leave a blank line before and after headings, lists, and display equations.\n"
-    "- Keep headings complete (for example, '## Heading').\n"
     "- Keep lists valid and consistently indented.\n"
     "- Do not emit truncated or unfinished sentences.\n"
     "- Close all formatting markers: **, _, and code fences."
@@ -103,6 +101,7 @@ IMAGE_PART_TOKEN_ESTIMATE = env_int("AIUI_IMAGE_PART_TOKEN_ESTIMATE", 768)
 PARKER_EVIDENCE_LABEL_RE = re.compile(r"\[E\d+\]")
 PARKER_EVIDENCE_BULLET_RE = re.compile(r"(?mi)^\s*-\s*\[E\d+\]\s+")
 TOOL_CALL_BLOCK_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.IGNORECASE | re.DOTALL)
+THINK_BLOCK_RE = re.compile(r"<think>[\s\S]*?</think>\s*", re.IGNORECASE)
 _MODULE_CATALOG_CACHE: dict[str, Any] = {"expires_at": 0.0, "body": None}
 DEFAULT_AGENT_TOOL_NAMES = [
     "get_current_time",
@@ -1037,6 +1036,10 @@ def normalize_history(history: list[HistoryMessage], *, mode: str = "chat") -> l
     for item in history:
         text = build_user_text(item.content, item.attachments)
         if item.role == "assistant":
+            if not text:
+                continue
+            # Qwen best practice: strip thinking blocks from history
+            text = THINK_BLOCK_RE.sub("", text).strip()
             if not text:
                 continue
             if mode != "library" and looks_like_library_evidence_text(text):
