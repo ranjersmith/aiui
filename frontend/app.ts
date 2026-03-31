@@ -11,6 +11,11 @@ import rehypeHighlight from "rehype-highlight";
 import rehypeStringify from "rehype-stringify";
 
 import { readConfig } from "./core/config.mjs";
+import {
+  hasMalformedMathDelimiters,
+  preprocessRawText,
+  shouldDeferMathRenderDuringStreaming,
+} from "./core/math-rendering";
 import { providerFor } from "./providers";
 import type { Attachment, ChatMessage, StreamHandlers } from "./core/types";
 
@@ -31,7 +36,7 @@ const codeHighlighter = unified().use(rehypeHighlight, { detect: true, ignoreMis
 const hastStringifier = unified().use(rehypeStringify);
 
 const domPurify = typeof window !== "undefined" ? createDOMPurify(window) : null;
-type RenderFallbackReason = "malformed-math-delimiters" | "pipeline-error";
+type RenderFallbackReason = "malformed-math-delimiters" | "pipeline-error" | "streaming-math-deferred";
 
 type RenderedMarkdown = {
   html: string;
@@ -50,7 +55,6 @@ type RenderTrace = {
 
 type StreamingPreview = {
   html: string;
-  isBuffered: boolean;
   trace: RenderTrace;
 };
 
@@ -69,51 +73,6 @@ type NotationDiagnostics = {
 };
 
 const markdownHtmlCache = new Map<string, RenderedMarkdown>();
-
-// See MATH_DELIMITERS_CONTRACT.json for canonical contract.
-// Frontend normalizes backend-provided \(...\) and $$...$$ to remark-math's $...$ and $$...$$ format.
-function normalizeEscapedMathDelimiters(text: string): string {
-  const codeFences: string[] = [];
-  const withoutCodeFences = text.replace(/```[\s\S]*?```/g, (block) => {
-    const token = `@@AIUI_CODE_FENCE_${codeFences.length}@@`;
-    codeFences.push(block);
-    return token;
-  });
-
-  const normalized = withoutCodeFences
-    // Backend sends \[...\] and \(...\), remark-math expects $$...$$ and $...$ respectively.
-    .replace(/\\\[([\s\S]+?)\\\]/g, (_match, inner: string) => `$$${inner}$$`)
-    .replace(/\\\((.+?)\\\)/g, (_match, inner: string) => `$${inner}$`)
-    .replace(/\\\$\\\$([\s\S]+?)\\\$\\\$/g, (_match, inner: string) => `$$${inner}$$`)
-    .replace(/\\\$(.+?)\\\$/g, (match, inner: string) => {
-      const looksMath = /[A-Za-z\\^_{}=+\-*/]/.test(inner);
-      return looksMath ? `$${inner}$` : match;
-    });
-
-  return normalized.replace(/@@AIUI_CODE_FENCE_(\d+)@@/g, (_token, index: string) => {
-    const i = Number(index);
-    return Number.isInteger(i) && codeFences[i] ? codeFences[i] : "";
-  });
-}
-
-function preprocessRawText(content: string): string {
-  const normalizedNewlines = String(content || "").replace(/\r\n?/g, "\n");
-  return normalizeEscapedMathDelimiters(normalizedNewlines);
-}
-
-function hasMalformedMathDelimiters(text: string): boolean {
-  // Hide fenced code blocks from delimiter checks.
-  const withoutCodeFences = text.replace(/```[\s\S]*?```/g, "");
-
-  const displayCount = (withoutCodeFences.match(/(?<!\\)\$\$/g) || []).length;
-  if (displayCount % 2 !== 0) return true;
-
-  const maskedDisplay = withoutCodeFences.replace(/(?<!\\)\$\$[\s\S]*?(?<!\\)\$\$/g, "");
-  const inlineCount = (maskedDisplay.match(/(?<!\\)(?<!\$)\$(?!\$)/g) || []).length;
-  if (inlineCount % 2 !== 0) return true;
-
-  return false;
-}
 
 function sanitizeHtml(fragment: string): string {
   return domPurify ? domPurify.sanitize(fragment) : fragment;
@@ -233,31 +192,33 @@ function renderMessageMarkdown(content: string): RenderedMarkdown {
   return rendered;
 }
 
-function renderStreamingPreview(content: string, previousHtml: string): StreamingPreview {
-  const rendered = renderMessageMarkdown(content);
+function renderStreamingPreview(content: string): StreamingPreview {
+  const normalized = preprocessRawText(content);
+  const shouldDeferMath = shouldDeferMathRenderDuringStreaming(content);
 
-  if (!rendered.trace.malformedMathDelimiters) {
+  if (!shouldDeferMath) {
+    const rendered = renderMessageMarkdown(content);
     return {
       html: rendered.html,
-      isBuffered: false,
       trace: rendered.trace,
     };
   }
-
-  const normalized = preprocessRawText(content);
 
   try {
     const html = sanitizeHtml(renderMarkdownPlain(normalized));
     return {
       html,
-      isBuffered: Boolean(previousHtml),
-      trace: buildRenderTrace(String(content || ""), normalized, html, "malformed-math-delimiters"),
+      trace: buildRenderTrace(
+        String(content || ""),
+        normalized,
+        html,
+        hasMalformedMathDelimiters(normalized) ? "malformed-math-delimiters" : "streaming-math-deferred"
+      ),
     };
   } catch {
     const html = sanitizeHtml(normalized);
     return {
       html,
-      isBuffered: false,
       trace: buildRenderTrace(String(content || ""), normalized, html, "pipeline-error"),
     };
   }
@@ -567,7 +528,7 @@ function App() {
         const rate = Math.round((tokenCount() * 1000) / Math.max(elapsedMs, 1));
         setTokensPerSecond(rate);
         pendingDelta += delta;
-        const preview = renderStreamingPreview(assistantTailTextWithPending(), streamingPreview()?.html || "");
+        const preview = renderStreamingPreview(assistantTailTextWithPending());
         setStreamingPreview(preview);
         setRenderTrace(preview.trace);
         const diag = buildNotationDiagnostics(assistantTailTextWithPending(), "streaming", null);
@@ -693,7 +654,7 @@ function App() {
     return visible.map((msg, index) => {
       const isStreamingAssistantTail = isStreaming() && msg.role === "assistant" && index === lastIndex;
       const rendered = isStreamingAssistantTail
-        ? streamingPreview() || renderStreamingPreview(msg.content, "")
+        ? streamingPreview() || renderStreamingPreview(msg.content)
         : renderMessageMarkdown(msg.content);
 
       const isLastAssistant = msg.role === "assistant" && index === lastIndex;
