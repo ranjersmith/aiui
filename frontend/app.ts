@@ -281,6 +281,8 @@ function App() {
   const [flushesPerSecond, setFlushesPerSecond] = createSignal(0);
   const [tokenCount, setTokenCount] = createSignal(0);
   const [tokensPerSecond, setTokensPerSecond] = createSignal(0);
+  const [thinkingTokenCount, setThinkingTokenCount] = createSignal(0);
+  const [thinkingDurationMs, setThinkingDurationMs] = createSignal<number | null>(null);
   const [totalElapsedMs, setTotalElapsedMs] = createSignal<number | null>(null);
   const [notationDiagnostics, setNotationDiagnostics] = createSignal<NotationDiagnostics | null>(null);
   const [streamingPreview, setStreamingPreview] = createSignal<StreamingPreview | null>(null);
@@ -302,6 +304,7 @@ function App() {
   let flushTimer: number | null = null;
   let lastMonitorLogAtMs = 0;
   let streamStartedAtMs = 0;
+  let contentStartedAtMs = 0;
   let hasSeenFirstToken = false;
   let flushCountCurrentSecond = 0;
   let flushRateInterval: number | null = null;
@@ -517,6 +520,8 @@ function App() {
     setFirstTokenLatencyMs(null);
     setTokenCount(0);
     setTokensPerSecond(0);
+    setThinkingTokenCount(0);
+    setThinkingDurationMs(null);
     setTotalElapsedMs(null);
     setStreamingPreview(null);
     setLastCompletedMetrics(null);
@@ -530,14 +535,21 @@ function App() {
         if (modelName.trim()) setActiveModel(modelName.trim());
       },
       onStatus: (textStatus) => setStatus(textStatus || "streaming..."),
+      onThinkingToken: () => {
+        setThinkingTokenCount((prev) => prev + 1);
+        setThinkingDurationMs(Math.round(performance.now() - streamStartedAtMs));
+      },
       onToken: (delta) => {
         if (!hasSeenFirstToken) {
           hasSeenFirstToken = true;
-          setFirstTokenLatencyMs(Math.max(0, Math.round(performance.now() - streamStartedAtMs)));
+          contentStartedAtMs = performance.now();
+          setFirstTokenLatencyMs(Math.max(0, Math.round(contentStartedAtMs - streamStartedAtMs)));
         }
         setTokenCount((prev) => prev + 1);
-        const elapsedMs = performance.now() - streamStartedAtMs;
-        const rate = Math.round((tokenCount() * 1000) / Math.max(elapsedMs, 1));
+        const contentElapsedMs = performance.now() - contentStartedAtMs;
+        const rate = contentElapsedMs > 100
+          ? Math.round((tokenCount() * 1000) / contentElapsedMs)
+          : 0;
         setTokensPerSecond(rate);
         pendingDelta += delta;
         const fullText = assistantTailTextWithPending();
@@ -588,11 +600,18 @@ function App() {
         logRenderTrace(finalRendered.trace);
         const elapsedMs = Math.round(performance.now() - streamStartedAtMs);
         setTotalElapsedMs(elapsedMs);
-        const finalRate = Math.round((tokenCount() * 1000) / Math.max(elapsedMs, 1));
-        setTokensPerSecond(finalRate);
-        const ttftSnap = firstTokenLatencyMs() ?? 0;
+        const contentElapsedMs = contentStartedAtMs > 0
+          ? Math.round(performance.now() - contentStartedAtMs)
+          : elapsedMs;
         const toksSnap = tokenCount();
-        setLastCompletedMetrics(`⏱ ${ttftSnap}ms • ${toksSnap}t • ${finalRate}t/s • ${elapsedMs}ms`);
+        const finalRate = contentElapsedMs > 100
+          ? Math.round((toksSnap * 1000) / contentElapsedMs)
+          : 0;
+        setTokensPerSecond(finalRate);
+        const thinkToks = thinkingTokenCount();
+        const thinkMs = thinkingDurationMs() ?? 0;
+        const thinkPart = thinkToks > 0 ? `🧠 ${thinkToks}t ${(thinkMs / 1000).toFixed(1)}s • ` : "";
+        setLastCompletedMetrics(`${thinkPart}${toksSnap}t • ${finalRate}t/s • ${(elapsedMs / 1000).toFixed(1)}s`);
         if (summary && summary !== "done") {
           setStatus(`done | ${summary}`);
         } else {
@@ -611,10 +630,9 @@ function App() {
         logRenderTrace(errored.trace);
         const elapsedMs = Math.round(performance.now() - streamStartedAtMs);
         setTotalElapsedMs(elapsedMs);
-        const ttftErr = firstTokenLatencyMs() ?? 0;
         const toksErr = tokenCount();
         const rateErr = Math.round((toksErr * 1000) / Math.max(elapsedMs, 1));
-        setLastCompletedMetrics(`⏱ ${ttftErr}ms • ${toksErr}t • ${rateErr}t/s • ${elapsedMs}ms`);
+        setLastCompletedMetrics(`${toksErr}t • ${rateErr}t/s • ${(elapsedMs / 1000).toFixed(1)}s`);
         setStatus(`error: ${errorText}`);
         setMessages((prev) => {
           const next = [...prev];
@@ -699,11 +717,12 @@ function App() {
           ${msg.role === "assistant" ? "aiui" : "user"}
           ${isStreamingAssistantTail
             ? html`<span class="render-debug-badge">${() => {
-                const ttft = firstTokenLatencyMs() ?? 0;
                 const toks = tokenCount();
-                const rate = tokensPerSecond().toFixed(1);
-                const elapsed = totalElapsedMs() ?? 0;
-                return `⏱ ${ttft}ms • ${toks}t • ${rate}t/s • ${elapsed}ms`;
+                const thinkToks = thinkingTokenCount();
+                const rate = tokensPerSecond();
+                const elapsedMs = performance.now() - streamStartedAtMs;
+                const thinkPart = thinkToks > 0 ? `🧠 ${thinkToks}t • ` : "";
+                return `${thinkPart}${toks}t • ${rate}t/s • ${(elapsedMs / 1000).toFixed(1)}s`;
               }}</span>`
             : isLastAssistant && lastCompletedMetrics()
               ? html`<span class="render-debug-badge">${lastCompletedMetrics}</span>`

@@ -30,6 +30,7 @@ export type StreamHandlers = {
   onMeta: (modelName: string) => void;
   onStatus: (textStatus: string) => void;
   onToken: (delta: string) => void;
+  onThinkingToken?: () => void;
   onDone: (summary?: string) => void;
   onError: (errorText: string) => void;
 };
