@@ -180,12 +180,11 @@ export const streamOpenAiCompatible: StreamProvider = async ({
     if (!first) return;
 
     const delta = (first.delta || {}) as Record<string, unknown>;
+    if (delta.reasoning_content) handlers.onStatus("thinking...");
     emitText(delta.content);
-    emitText(delta.reasoning_content);
 
     const message = (first.message || {}) as Record<string, unknown>;
     emitText(message.content);
-    emitText(message.reasoning_content);
 
     const text = first.text;
     emitText(text);

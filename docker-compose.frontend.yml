@@ -21,6 +21,6 @@ services:
       # Backend target used by /llm proxy from inside the UI container.
       # Default points to host-published qwen backend port.
       LLM_BACKEND_URL: "${LLM_BACKEND_URL:-http://host.docker.internal:8081}"
-      LLM_UI_SYSTEM_PROMPT: "You are a concise technical assistant. When writing math, use $...$ for inline math and $$...$$ for display math. Every math delimiter must be balanced and closed. Do not place LaTeX outside math delimiters. Do not wrap equations in bold or italics. Return plain markdown only. Preserve backslashes in LaTeX commands."
+      LLM_UI_SYSTEM_PROMPT: "You are a concise technical assistant. When writing math, use $$...$$ for inline math and $$$$...$$$$ for display math. Every math delimiter must be balanced and closed. Do not place LaTeX outside math delimiters. Do not wrap equations in bold or italics. Return plain markdown only. Preserve backslashes in LaTeX commands."
     extra_hosts:
       - "host.docker.internal:host-gateway"
