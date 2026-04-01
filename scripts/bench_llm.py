@@ -23,7 +23,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--model",
-        default=os.getenv("AIUI_DEFAULT_MODEL", "Qwen3.5-9B-BF16.gguf"),
+        default=os.getenv("AIUI_DEFAULT_MODEL", os.getenv("CHAT_MODEL", "Qwen3-1.7B-Q8_0.gguf")),
         help="Model id to request",
     )
     parser.add_argument(

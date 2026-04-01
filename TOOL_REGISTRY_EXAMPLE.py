@@ -82,12 +82,12 @@ def chat_completions():
             "response": response,
             "tool_calls": tool_calls,
             "tool_results": tool_results,
-            "model": data.get("model", "Qwen3.5-9B-BF16.gguf"),
+            "model": data.get("model", "Qwen3-1.7B-Q8_0.gguf"),
         })
     
     return jsonify({
         "response": response,
-        "model": data.get("model", "Qwen3.5-9B-BF16.gguf"),
+        "model": data.get("model", "Qwen3-1.7B-Q8_0.gguf"),
     })
 
 

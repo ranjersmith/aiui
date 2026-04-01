@@ -1,7 +1,7 @@
 const DEFAULT_CONFIG = {
   provider: "openai",
   baseUrl: "/llm",
-  model: "Qwen3.5-9B-BF16.gguf",
+  model: "Qwen3-1.7B-Q8_0.gguf",
   temperature: 0.7,
   maxTokens: 81920,
   systemPrompt: "",

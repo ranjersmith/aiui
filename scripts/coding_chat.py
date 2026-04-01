@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -23,7 +24,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--model",
-        default="Qwen3.5-9B-BF16.gguf",
+        default=os.environ.get("CHAT_MODEL", "Qwen3-1.7B-Q8_0.gguf"),
         help="Model id to report in the request payload.",
     )
     parser.add_argument(

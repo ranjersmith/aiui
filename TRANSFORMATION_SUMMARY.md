@@ -130,7 +130,7 @@ Benefits:
 | Capability | Current | Recommended | Path |
 |------------|---------|-------------|------|
 | **Reasoning** | Hidden (off) | Toggle user on/off | Add UI control |
-| **Context** | 128K configured | Keep 128K (tune by VRAM) | `--ctx-size` param |
+| **Context** | 32K/262K | 64K (doubled) | `--ctx-size` param |
 | **FC Strategy** | Nous only | Auto-select (Nous/native) | `ToolManager.switch_strategy()` |
 | **Tool Count** | 3 | 20+ | Registry extensible |
 | **Parallel Exec** | Sequential | Async/gather | Implementation in progress |

@@ -3,7 +3,7 @@ Function calling strategy abstraction.
 
 Allows swapping between different function-calling formats:
 - Nous (current AIUI standard)
-- Qwen native (Qwen3.5-9B-BF16.gguf preferred format)
+- Qwen native (Qwen3-1.7B-Q8_0.gguf preferred format)
 - DeepSeek compatible (for future compatibility)
 """
 
@@ -116,7 +116,7 @@ Always provide your final answer after tool execution.
 
 
 class QwenNativeFunctionCallingStrategy(FunctionCallingStrategy):
-    """Qwen3.5-9B-BF16 native function calling format.
+    """Qwen3 native function calling format.
     
     Qwen natively outputs tool calls in structured format that llama.cpp
     can parse directly via built-in tool-call parsing.

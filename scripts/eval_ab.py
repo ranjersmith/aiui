@@ -5,6 +5,7 @@ import argparse
 import csv
 import datetime as dt
 import json
+import os
 import random
 import re
 import statistics
@@ -17,7 +18,7 @@ from typing import Any
 
 
 DEFAULT_URL = "http://127.0.0.1:8081/v1/chat/completions"
-DEFAULT_MODEL = "Qwen3.5-9B-BF16.gguf"
+DEFAULT_MODEL = os.getenv("CHAT_MODEL", "Qwen3-1.7B-Q8_0.gguf")
 DEFAULT_PROMPTS = Path(__file__).resolve().parent.parent / "eval" / "prompts_qwen35b_ab.jsonl"
 
 

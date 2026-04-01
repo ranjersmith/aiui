@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MODEL_PATH="${MODEL_PATH:-/home/ra/models/Qwen3.5-9B-BF16.gguf}"
+MODEL_PATH="${MODEL_PATH:-/home/ra/models/Qwen3-Coder-30B-A3B-Instruct-Q5_K_M.gguf}"
 LLAMA_SERVER_BIN="${LLAMA_SERVER_BIN:-/home/ra/qwen3vl-rocm-reference/llama.cpp/build/bin/llama-server}"
 LOG_FILE="${LOG_FILE:-/tmp/llama-8081.log}"
 
@@ -26,7 +26,7 @@ nohup "$LLAMA_SERVER_BIN" \
   -m "$MODEL_PATH" \
   --gpu-layers 99 --flash-attn on \
   --ctx-size 131072 \
-  --cache-type-k q8_0 --cache-type-v q8_0 \
+  --cache-type-k q5_1 --cache-type-v q5_1 \
   --host 0.0.0.0 --port 8081 \
   --threads 6 --threads-batch 6 --threads-http 2 \
   --parallel 1 --cont-batching \
@@ -35,8 +35,8 @@ nohup "$LLAMA_SERVER_BIN" \
   --n-predict 81920 \
   --reasoning-format deepseek \
   --tools all \
-  --metrics --no-webui \
+  --metrics \
   >"$LOG_FILE" 2>&1 &
 
-echo "Started llama-server on 8081 with 128K context (PID $!)."
+echo "Started llama-server on 8081 with 2x64K slots (PID $!)."
 echo "Log: $LOG_FILE"

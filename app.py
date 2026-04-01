@@ -57,7 +57,7 @@ def env_float(key: str, default: float) -> float:
 
 
 LLM_BASE_URL = os.getenv("AIUI_LLM_BASE_URL", "http://host.docker.internal:8081").rstrip("/")
-DEFAULT_MODEL = os.getenv("AIUI_DEFAULT_MODEL", "Qwen3.5-9B-BF16.gguf")
+DEFAULT_MODEL = os.getenv("AIUI_DEFAULT_MODEL", os.getenv("CHAT_MODEL", "Qwen3-1.7B-Q8_0.gguf"))
 REQUEST_TIMEOUT_SECONDS = int(os.getenv("AIUI_REQUEST_TIMEOUT_SECONDS", "120"))
 SYSTEM_PROMPT = os.getenv("AIUI_SYSTEM_PROMPT", "You are a concise, helpful assistant.").strip()
 # CANONICAL MATH DELIMITER CONTRACT: See MATH_DELIMITERS_CONTRACT.json for the contract.
@@ -517,7 +517,7 @@ _CODING_MODES = frozenset({"code", "coding", "coder", "dev", "develop", "agent"}
 
 
 def resolve_llm_base_url(mode: str | None) -> str:
-    """Return the single LLM base URL (8081 — Qwen3.5-9B-BF16)."""
+    """Return the single LLM base URL (8081 — Qwen3-1.7B)."""
     return LLM_BASE_URL
 
 

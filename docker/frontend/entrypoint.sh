@@ -13,7 +13,7 @@ fi
 
 provider_escaped="$(js_escape "$provider")"
 base_url_escaped="$(js_escape "${LLM_UI_BASE_URL:-$default_base_url}")"
-model_escaped="$(js_escape "${LLM_UI_MODEL:-Qwen3.5-9B-BF16.gguf}")"
+model_escaped="$(js_escape "${LLM_UI_MODEL:-}")"
 system_prompt_escaped="$(js_escape "${LLM_UI_SYSTEM_PROMPT:-}")"
 tool_profile_escaped="$(js_escape "${LLM_UI_TOOL_PROFILE:-safe}")"
 tool_strategy_escaped="$(js_escape "${LLM_UI_TOOL_STRATEGY:-nous}")"
