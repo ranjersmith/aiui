@@ -2,10 +2,7 @@
   "name": "aiui",
   "version": "1.0.0",
   "description": "Minimal chat UI for a local `llama.cpp` server.",
-  "main": "index.js",
-  "directories": {
-    "test": "tests"
-  },
+  "type": "commonjs",
   "scripts": {
     "stack:up": "./scripts/stack.sh up",
     "stack:down": "./scripts/stack.sh down",
@@ -25,12 +22,9 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
   "dependencies": {
     "dompurify": "^3.2.6",
     "katex": "^0.16.44",
-    "marked": "^15.0.12",
-    "marked-katex-extension": "^5.1.5",
     "rehype-highlight": "^7.0.2",
     "rehype-katex": "^7.0.1",
     "rehype-stringify": "^10.0.1",

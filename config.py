@@ -8,8 +8,11 @@ from tools import list_strategies
 
 
 def env_bool(key: str, default: bool = False) -> bool:
-    """Parse env var as boolean: '1', 'true', 'yes' → True, everything else → False."""
-    return os.getenv(key, "").strip().lower() in {"1", "true", "yes"}
+    """Parse env var as boolean: '1', 'true', 'yes' → True; '0', 'false', 'no' → False; unset/empty → default."""
+    val = os.getenv(key)
+    if val is None or val.strip() == "":
+        return default
+    return val.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def env_int(key: str, default: int) -> int:

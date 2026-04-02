@@ -201,13 +201,6 @@ def sse_event(payload: dict[str, Any]) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
-_CODING_MODES = frozenset({"code", "coding", "coder", "dev", "develop", "agent"})
-
-
-def resolve_llm_base_url(mode: str | None) -> str:
-    return LLM_BASE_URL
-
-
 def build_upstream_headers() -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
     if DEFAULT_API_KEY:
@@ -508,7 +501,6 @@ async def call_llm_chat(
     temperature: float,
     max_tokens: int | None,
 ) -> str:
-    base_url = resolve_llm_base_url(mode)
     payload: dict[str, Any] = {
         "model": model,
         "messages": messages,
@@ -522,7 +514,7 @@ async def call_llm_chat(
 
     async with httpx.AsyncClient(timeout=build_http_timeout()) as client:
         response = await client.post(
-            f"{base_url}/v1/chat/completions",
+            f"{LLM_BASE_URL}/v1/chat/completions",
             json=payload,
             headers=build_upstream_headers(),
         )
@@ -542,7 +534,6 @@ async def stream_llm_chat(
     temperature: float,
     max_tokens: int | None,
 ) -> Any:
-    base_url = resolve_llm_base_url(mode)
     payload: dict[str, Any] = {
         "model": model,
         "messages": messages,
@@ -558,7 +549,7 @@ async def stream_llm_chat(
     async with httpx.AsyncClient(timeout=build_http_timeout()) as client:
         async with client.stream(
             "POST",
-            f"{base_url}/v1/chat/completions",
+            f"{LLM_BASE_URL}/v1/chat/completions",
             json=payload,
             headers=build_upstream_headers(),
         ) as response:
