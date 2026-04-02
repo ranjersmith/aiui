@@ -6,11 +6,32 @@ When the model calls these, llama.cpp will execute them.
 We scaffold them here for AIUI to expose their schemas to the model.
 """
 
+import shlex
 import subprocess
 import os
 from pathlib import Path
 
 from .base import BaseTool, register_tool, ToolError
+
+
+def _validate_workspace_path(tool_name: str, raw_path: str) -> Path:
+    """Resolve and validate that a path is within WORKSPACE_ROOT.
+
+    Raises ToolError if the resolved path escapes the workspace.
+    Returns the resolved absolute Path.
+    """
+    from config import WORKSPACE_ROOT
+
+    resolved = Path(raw_path).expanduser().resolve()
+    if WORKSPACE_ROOT:
+        workspace = Path(WORKSPACE_ROOT).resolve()
+        if not (resolved == workspace or str(resolved).startswith(str(workspace) + "/")):
+            raise ToolError(
+                tool_name,
+                f"Path '{resolved}' is outside workspace root '{workspace}'",
+                "PATH_DENIED",
+            )
+    return resolved
 
 
 @register_tool("read_file")
@@ -39,7 +60,7 @@ class ReadFileTool(BaseTool):
     def call(self, file_path: str, **kwargs) -> str:
         """Read file - note: llama.cpp will execute this natively."""
         try:
-            file_path = Path(file_path).expanduser()
+            file_path = _validate_workspace_path(self.name, file_path)
             if not file_path.exists():
                 raise ToolError(self.name, f"File not found: {file_path}")
             if not file_path.is_file():
@@ -85,7 +106,7 @@ class WriteFileTool(BaseTool):
     def call(self, file_path: str, contents: str, **kwargs) -> str:
         """Write file - note: llama.cpp will execute this natively."""
         try:
-            file_path = Path(file_path).expanduser()
+            file_path = _validate_workspace_path(self.name, file_path)
             file_path.parent.mkdir(parents=True, exist_ok=True)
             
             with open(file_path, 'w', encoding='utf-8') as f:
@@ -131,7 +152,7 @@ class GrepSearchTool(BaseTool):
     def call(self, pattern: str, path: str, max_results: int = 20, **kwargs) -> str:
         """Search files using grep."""
         try:
-            path = Path(path).expanduser()
+            path = _validate_workspace_path(self.name, path)
             if not path.exists():
                 raise ToolError(self.name, f"Path not found: {path}")
             
@@ -192,7 +213,7 @@ class FileGlobSearchTool(BaseTool):
     def call(self, pattern: str, root_path: str = ".", max_results: int = 50, **kwargs) -> str:
         """Search for files matching glob pattern."""
         try:
-            root = Path(root_path).expanduser()
+            root = _validate_workspace_path(self.name, root_path)
             if not root.exists():
                 raise ToolError(self.name, f"Root path not found: {root}")
             
@@ -233,13 +254,29 @@ class ExecShellCommandTool(BaseTool):
 
     def call(self, command: str, timeout: int = 30, **kwargs) -> str:
         """Execute shell command - CAUTION: Only enable in trusted environments."""
+        from config import SHELL_COMMAND_ALLOWLIST, WORKSPACE_ROOT
+
         try:
+            argv = shlex.split(command)
+            if not argv:
+                raise ToolError(self.name, "Empty command", "EXEC_ERROR")
+
+            if SHELL_COMMAND_ALLOWLIST is not None:
+                executable = Path(argv[0]).name
+                if executable not in SHELL_COMMAND_ALLOWLIST:
+                    raise ToolError(
+                        self.name,
+                        f"Command '{executable}' not in allowlist: {sorted(SHELL_COMMAND_ALLOWLIST)}",
+                        "COMMAND_DENIED",
+                    )
+
+            cwd = WORKSPACE_ROOT if WORKSPACE_ROOT else None
             result = subprocess.run(
-                command,
-                shell=True,
+                argv,
                 capture_output=True,
                 text=True,
-                timeout=timeout
+                timeout=timeout,
+                cwd=cwd,
             )
             
             output = result.stdout
@@ -287,7 +324,7 @@ class EditFileTool(BaseTool):
     def call(self, file_path: str, old_str: str, new_str: str, **kwargs) -> str:
         """Edit file by replacing substring."""
         try:
-            file_path = Path(file_path).expanduser()
+            file_path = _validate_workspace_path(self.name, file_path)
             if not file_path.exists():
                 raise ToolError(self.name, f"File not found: {file_path}")
             
@@ -346,7 +383,7 @@ class ApplyDiffTool(BaseTool):
         try:
             import tempfile
             
-            file_path = Path(file_path).expanduser()
+            file_path = _validate_workspace_path(self.name, file_path)
             if not file_path.exists():
                 raise ToolError(self.name, f"File not found: {file_path}")
             

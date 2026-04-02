@@ -149,3 +149,18 @@ TEXT_DOCUMENT_EXTENSIONS = {
 }
 WORDPROCESSINGML_NAMESPACE = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
 DRAWINGML_TEXT_TAG = "{http://schemas.openxmlformats.org/drawingml/2006/main}t"
+
+# ── Tool sandboxing ───────────────────────────────────────────────────────
+# WORKSPACE_ROOT restricts file tools (read_file, write_file, edit_file,
+# apply_diff, grep_search, file_glob_search) to this directory tree.
+# Set to empty string to disable sandboxing (legacy behaviour).
+WORKSPACE_ROOT = os.getenv("AIUI_WORKSPACE_ROOT", os.path.expanduser("~")).rstrip("/")
+
+# SHELL_COMMAND_ALLOWLIST restricts exec_shell_command to these executables.
+# Comma-separated. Empty = allow all (legacy behaviour — use with trusted profiles only).
+_SHELL_ALLOWLIST_RAW = os.getenv("AIUI_SHELL_COMMAND_ALLOWLIST", "").strip()
+SHELL_COMMAND_ALLOWLIST: set[str] | None = (
+    {cmd.strip() for cmd in _SHELL_ALLOWLIST_RAW.split(",") if cmd.strip()}
+    if _SHELL_ALLOWLIST_RAW
+    else None
+)
