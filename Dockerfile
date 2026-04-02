@@ -26,6 +26,7 @@ RUN apt-get update \
     && pip install --no-cache-dir -r /app/requirements.txt
 
 COPY app.py /app/app.py
+COPY tools /app/tools
 COPY --from=frontend-build /app/static /app/static
 
 EXPOSE 8101
