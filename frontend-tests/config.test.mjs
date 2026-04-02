@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { normalizeBaseUrl } from "../frontend/core/config.mjs";
+import { normalizeBaseUrl } from "../frontend/core/config.ts";
 
 test("normalizeBaseUrl trims whitespace and trailing slash", () => {
   assert.equal(normalizeBaseUrl("  http://localhost:8081/  "), "http://localhost:8081");

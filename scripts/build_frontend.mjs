@@ -24,6 +24,7 @@ await build({
   target: ["es2020"],
   outfile: resolve(staticDir, "app.js"),
   minify: true,
+  sourcemap: true,
   logLevel: "info",
 });
 

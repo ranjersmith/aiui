@@ -2,7 +2,7 @@ import { createMemo, createSignal } from "solid-js";
 import { render } from "solid-js/web";
 import html from "solid-js/html";
 
-import { readConfig } from "./core/config.mjs";
+import { readConfig } from "./core/config";
 import { providerFor } from "./providers";
 import { stripThinkBlocks, hasUnclosedThinkBlock } from "./core/utils";
 import {

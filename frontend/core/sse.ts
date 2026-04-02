@@ -1,4 +1,7 @@
-export function parseSseBuffer(buffer, onPayload) {
+export function parseSseBuffer(
+  buffer: string,
+  onPayload: (payload: string) => void,
+): string {
   while (true) {
     const match = /\r?\n\r?\n/.exec(buffer);
     if (!match) break;
@@ -10,8 +13,8 @@ export function parseSseBuffer(buffer, onPayload) {
 
     const payload = rawEvent
       .split(/\r?\n/)
-      .filter((line) => line.startsWith("data:"))
-      .map((line) => {
+      .filter((line: string) => line.startsWith("data:"))
+      .map((line: string) => {
         const value = line.slice(5);
         return value.startsWith(" ") ? value.slice(1) : value;
       })
@@ -25,13 +28,16 @@ export function parseSseBuffer(buffer, onPayload) {
   return buffer;
 }
 
-export function buildErrorMessage(status, responseBody) {
+export function buildErrorMessage(
+  status: number | string,
+  responseBody: unknown,
+): string {
   const fallback = String(status);
   if (!responseBody || typeof responseBody !== "object") return fallback;
 
-  const body = responseBody;
+  const body = responseBody as Record<string, unknown>;
   if (body.error && typeof body.error === "object") {
-    const msg = body.error.message;
+    const msg = (body.error as Record<string, unknown>).message;
     if (typeof msg === "string" && msg.trim()) return msg;
   }
   if (typeof body.detail === "string" && body.detail.trim()) return body.detail;

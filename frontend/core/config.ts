@@ -1,4 +1,21 @@
-const DEFAULT_CONFIG = {
+declare global {
+  interface Window {
+    __LLM_UI_CONFIG__?: Record<string, unknown>;
+  }
+}
+
+export type AppConfig = {
+  provider: string;
+  baseUrl: string;
+  model: string;
+  temperature: number;
+  maxTokens: number;
+  systemPrompt: string;
+  toolProfile: string;
+  toolStrategy: string;
+};
+
+const DEFAULT_CONFIG: AppConfig = {
   provider: "openai",
   baseUrl: "/llm",
   model: "Qwen3-1.7B-Q8_0.gguf",
@@ -9,7 +26,7 @@ const DEFAULT_CONFIG = {
   toolStrategy: "nous",
 };
 
-export function readConfig() {
+export function readConfig(): AppConfig {
   const cfg = window.__LLM_UI_CONFIG__ || {};
   return {
     provider: "openai",
@@ -33,6 +50,6 @@ export function readConfig() {
   };
 }
 
-export function normalizeBaseUrl(baseUrl) {
+export function normalizeBaseUrl(baseUrl: string): string {
   return String(baseUrl || "").trim().replace(/\/$/, "");
 }

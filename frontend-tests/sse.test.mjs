@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { parseSseBuffer } from "../frontend/core/sse.mjs";
+import { parseSseBuffer } from "../frontend/core/sse.ts";
 
 test("parseSseBuffer handles CRLF events", () => {
   const payloads = [];

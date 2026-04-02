@@ -25,3 +25,4 @@ eval_runs/
 
 # Generated at runtime (must not be versioned)
 static/runtime-config.js
+static/app.js.map

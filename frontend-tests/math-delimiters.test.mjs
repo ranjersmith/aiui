@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { parseSseBuffer } from "../frontend/core/sse.mjs";
+import { parseSseBuffer } from "../frontend/core/sse.ts";
 
 // Integration tests for canonical math delimiter contract:
 // - Inline math: \(...\) (required, never single $)

@@ -1,5 +1,5 @@
-import { normalizeBaseUrl } from "../core/config.mjs";
-import { parseSseBuffer, buildErrorMessage } from "../core/sse.mjs";
+import { normalizeBaseUrl } from "../core/config";
+import { parseSseBuffer, buildErrorMessage } from "../core/sse";
 import { stripThinkBlocks } from "../core/utils";
 import type { Attachment, StreamProvider } from "../core/types";
 
