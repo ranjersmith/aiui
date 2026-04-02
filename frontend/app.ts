@@ -17,19 +17,9 @@ import {
   shouldDeferMathRenderDuringStreaming,
 } from "./core/math-rendering";
 import { providerFor } from "./providers";
+import { stripThinkBlocks, hasUnclosedThinkBlock } from "./core/utils";
 import type { Attachment, ChatMessage, StreamHandlers } from "./core/types";
 
-/** Strip <think>...</think> blocks from assistant content for display. */
-function stripThinkBlocks(text: string): string {
-  return text.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim();
-}
-
-/** Check if content has an unclosed <think> tag (still streaming thinking). */
-function hasUnclosedThinkBlock(text: string): boolean {
-  const opens = (text.match(/<think>/g) || []).length;
-  const closes = (text.match(/<\/think>/g) || []).length;
-  return opens > closes;
-}
 
 const MAX_RENDERED_MESSAGES = 120;
 const MAX_MARKDOWN_CACHE_SIZE = 500;

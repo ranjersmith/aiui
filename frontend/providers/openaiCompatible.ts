@@ -1,11 +1,7 @@
 import { normalizeBaseUrl } from "../core/config.mjs";
 import { parseSseBuffer, buildErrorMessage } from "../core/sse.mjs";
+import { stripThinkBlocks } from "../core/utils";
 import type { Attachment, StreamProvider } from "../core/types";
-
-/** Strip <think>...</think> blocks from text (Qwen best practice: no thinking content in history). */
-function stripThinkBlocks(text: string): string {
-  return text.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim();
-}
 
 type ContentPart =
   | { type: "text"; text: string }

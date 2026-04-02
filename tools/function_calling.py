@@ -12,6 +12,7 @@ from typing import List, Dict, Any, Optional
 import json
 import re
 
+# Also defined in config.py (kept separate to avoid circular imports).
 TOOL_CALL_BLOCK_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.IGNORECASE | re.DOTALL)
 
 

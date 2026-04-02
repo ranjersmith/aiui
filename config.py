@@ -81,6 +81,7 @@ IMAGE_PART_TOKEN_ESTIMATE = env_int("AIUI_IMAGE_PART_TOKEN_ESTIMATE", 768)
 # ── Regexes ────────────────────────────────────────────────────────────────
 PARKER_EVIDENCE_LABEL_RE = re.compile(r"\[E\d+\]")
 PARKER_EVIDENCE_BULLET_RE = re.compile(r"(?mi)^\s*-\s*\[E\d+\]\s+")
+# Also defined in tools/function_calling.py (kept separate to avoid circular imports).
 TOOL_CALL_BLOCK_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.IGNORECASE | re.DOTALL)
 THINK_BLOCK_RE = re.compile(r"<think>[\s\S]*?</think>\s*", re.IGNORECASE)
 
