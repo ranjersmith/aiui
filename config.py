@@ -116,6 +116,7 @@ SAFE_AGENT_TOOL_NAMES = [
     "read_file",
     "grep_search",
     "file_glob_search",
+    "nomic_search",
 ]
 MINIMAL_AGENT_TOOL_NAMES = [
     "get_current_time",
