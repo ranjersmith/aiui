@@ -57,7 +57,7 @@ def env_float(key: str, default: float) -> float:
 
 
 LLM_BASE_URL = os.getenv("AIUI_LLM_BASE_URL", "http://host.docker.internal:8081").rstrip("/")
-DEFAULT_MODEL = os.getenv("AIUI_DEFAULT_MODEL", os.getenv("CHAT_MODEL", "Qwen3-1.7B-Q8_0.gguf"))
+DEFAULT_MODEL = os.getenv("AIUI_DEFAULT_MODEL", os.getenv("CHAT_MODEL", "Qwen3-Coder-30B-A3B-Instruct-Q5_K_M.gguf"))
 REQUEST_TIMEOUT_SECONDS = int(os.getenv("AIUI_REQUEST_TIMEOUT_SECONDS", "120"))
 SYSTEM_PROMPT = os.getenv("AIUI_SYSTEM_PROMPT", "You are a concise, helpful assistant.").strip()
 # CANONICAL MATH DELIMITER CONTRACT: See MATH_DELIMITERS_CONTRACT.json for the contract.

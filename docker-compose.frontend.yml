@@ -13,7 +13,7 @@ services:
       # For direct connection, set to absolute URL: http://192.168.x.x:8081
       # Docker container access: http://host.docker.internal:8081 (macOS/Windows)
       LLM_UI_BASE_URL: "${LLM_UI_BASE_URL:-/llm}"
-      LLM_UI_MODEL: "${CHAT_MODEL:-Qwen3-1.7B-Q8_0.gguf}"
+      LLM_UI_MODEL: "${CHAT_MODEL:-Qwen3-Coder-30B-A3B-Instruct-Q5_K_M.gguf}"
       LLM_UI_TOOL_PROFILE: "${LLM_UI_TOOL_PROFILE:-safe}"
       LLM_UI_TOOL_STRATEGY: "${LLM_UI_TOOL_STRATEGY:-nous}"
       LLM_UI_TEMPERATURE: "0.7"
@@ -21,6 +21,6 @@ services:
       # Backend target used by /llm proxy from inside the UI container.
       # Default points to host-published qwen backend port.
       LLM_BACKEND_URL: "${LLM_BACKEND_URL:-http://host.docker.internal:8081}"
-      LLM_UI_SYSTEM_PROMPT: "You are a concise, helpful assistant. Keep answers brief and direct. When writing math, use $$...$$ for inline math and $$$$...$$$$ for display math. Return plain markdown only. /no_think"
+      LLM_UI_SYSTEM_PROMPT: "You are a concise, helpful assistant. Keep answers brief and direct. When writing math, use $...$ for inline math and $$...$$ for display math. Return plain markdown only. /no_think"
     extra_hosts:
       - "host.docker.internal:host-gateway"
