@@ -300,6 +300,7 @@ function App() {
 
   let currentAbort: AbortController | null = null;
   let fileInputRef: HTMLInputElement | undefined;
+  let threadRef: HTMLElement | undefined;
   let pendingDelta = "";
   let flushTimer: number | null = null;
   let lastMonitorLogAtMs = 0;
@@ -308,6 +309,20 @@ function App() {
   let hasSeenFirstToken = false;
   let flushCountCurrentSecond = 0;
   let flushRateInterval: number | null = null;
+  let userHasScrolledUp = false;
+
+  /** Auto-scroll thread to bottom unless user has scrolled up. */
+  function scrollToBottom() {
+    if (!threadRef || userHasScrolledUp) return;
+    threadRef.scrollTop = threadRef.scrollHeight;
+  }
+
+  function handleThreadScroll() {
+    if (!threadRef) return;
+    const threshold = 80;
+    const distanceFromBottom = threadRef.scrollHeight - threadRef.scrollTop - threadRef.clientHeight;
+    userHasScrolledUp = distanceFromBottom > threshold;
+  }
   let hasLoggedProxyHealthFailure = false;
 
   async function runProxyHealthCheck(trigger: "startup" | "retry") {
@@ -407,6 +422,7 @@ function App() {
       }
       return next;
     });
+    requestAnimationFrame(scrollToBottom);
   }
 
   function assistantTailTextWithPending(): string {
@@ -512,6 +528,8 @@ function App() {
     ]);
     setInput("");
     setPendingAttachments([]);
+    userHasScrolledUp = false;
+    requestAnimationFrame(scrollToBottom);
     setStatus("streaming...");
     setIsStreaming(true);
 
@@ -881,7 +899,7 @@ function App() {
       </aside>
 
       <main class="main">
-        <section class="thread">
+        <section class="thread" ref=${(el: HTMLElement) => { threadRef = el; el.addEventListener("scroll", handleThreadScroll, { passive: true }); }}>
           ${() => {
             const error = proxyHealthError();
             if (!error) return null;
