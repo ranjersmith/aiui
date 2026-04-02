@@ -19,8 +19,8 @@ from .function_calling import get_strategy, list_strategies
 
 
 # Import all tool modules to trigger @register_tool() decorators
-from . import builtin_llama
-from . import builtin_aiui
+from . import builtin_llama  # noqa: F401
+from . import builtin_aiui  # noqa: F401
 
 __all__ = [
     "BaseTool",

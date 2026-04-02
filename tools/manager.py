@@ -24,10 +24,9 @@ Example usage:
 """
 
 from typing import List, Dict, Any, Optional
-import json
 
-from .base import load_tools, get_tool_schemas, ToolError
-from .function_calling import get_strategy, list_strategies
+from .base import load_tools, ToolError
+from .function_calling import get_strategy
 
 
 class ToolManager:

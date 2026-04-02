@@ -6,11 +6,9 @@ When the model calls these, llama.cpp will execute them.
 We scaffold them here for AIUI to expose their schemas to the model.
 """
 
-import json
 import subprocess
 import os
 from pathlib import Path
-from typing import Optional
 
 from .base import BaseTool, register_tool, ToolError
 

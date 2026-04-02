@@ -1,163 +1,121 @@
+"""AIUI — FastAPI backend: routes, LLM proxy, SSE streaming, and application wiring."""
+
 from __future__ import annotations
 
 import asyncio
-import ast
-import base64
-import binascii
-import copy
-import io
 import json
 import logging
-import math
-import mimetypes
-import operator
-import os
-import re
-import shutil
-import subprocess
-import tempfile
 import time
-import urllib.parse
-import zipfile
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Literal
-from xml.etree import ElementTree as ET
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
-from tools import ToolError, ToolManager, list_strategies
+from tools import ToolError, ToolManager, list_strategies  # noqa: F401 (re-exported)
+
+# ── Re-export everything from config so existing tests (`import app as app_module`) keep working.
+from config import (  # noqa: F401
+    env_bool,
+    env_int,
+    env_float,
+    LLM_BASE_URL,
+    DEFAULT_MODEL,
+    REQUEST_TIMEOUT_SECONDS,
+    SYSTEM_PROMPT,
+    RESPONSE_FORMAT_GUIDANCE,
+    DEFAULT_API_KEY,
+    UPSTREAM_HEALTH_TIMEOUT_SECONDS,
+    CONTEXT_BUDGET_TOKENS,
+    CONTEXT_REPLY_RESERVE_TOKENS,
+    MODULE_CATALOG_CACHE_TTL_SECONDS,
+    AGENT_MAX_LLM_CALLS_PER_RUN,
+    AGENT_MAX_TOOL_CALLS_PER_TURN,
+    AGENT_ENABLE_NON_STREAM_LOOP,
+    AGENT_ENABLE_STREAM_LOOP,
+    AGENT_TOOL_PROFILE,
+    AGENT_TOOL_STRATEGY,
+    AGENT_ENABLED_TOOLS_RAW,
+    ENABLE_EXTERNAL_EXTRACTORS,
+    MAX_ATTACHMENTS,
+    MAX_ATTACHMENT_DATA_URL_CHARS,
+    MAX_DOCUMENT_BYTES,
+    MAX_DOCUMENT_TEXT_CHARS,
+    MAX_TOTAL_DOCUMENT_TEXT_CHARS,
+    IMAGE_PART_TOKEN_ESTIMATE,
+    PARKER_EVIDENCE_LABEL_RE,
+    PARKER_EVIDENCE_BULLET_RE,
+    TOOL_CALL_BLOCK_RE,
+    THINK_BLOCK_RE,
+    _REQUEST_TIMESTAMPS,
+    _MAX_REQUESTS_PER_SECOND,
+    _MAX_ATTACHMENT_BYTES_PER_REQUEST,
+    _MODULE_CATALOG_CACHE,
+    DEFAULT_AGENT_TOOL_NAMES,
+    SAFE_AGENT_TOOL_NAMES,
+    MINIMAL_AGENT_TOOL_NAMES,
+    AGENT_TOOL_PROFILES,
+    AGENT_ALLOWED_STRATEGIES,
+    TEXT_DOCUMENT_EXTENSIONS,
+    WORDPROCESSINGML_NAMESPACE,
+    DRAWINGML_TEXT_TAG,
+)
+
+from attachments import (  # noqa: F401
+    Attachment,
+    HistoryMessage,
+    ChatRequest,
+    attachment_name,
+    decode_attachment_data_url,
+    normalize_image_attachments,
+    validate_attachments,
+)
+
+from extraction import (  # noqa: F401
+    normalize_document_text,
+    decode_text_document,
+    extract_docx_text,
+    extract_pptx_text,
+    extract_pdf_text,
+    run_external_document_extractor,
+    extract_document_text,
+    build_document_context,
+)
+
+from context import (  # noqa: F401
+    compact_text,
+    estimate_text_tokens,
+    estimate_content_tokens,
+    estimate_messages_tokens,
+    extract_summary_text,
+    count_summary_images,
+    build_context_summary,
+    safe_add_ints,
+    as_int,
+    select_context_budget_indices,
+    split_messages_by_context_budget,
+    apply_context_budget,
+    build_summary_system_prompt,
+    combine_context_summaries,
+)
+
+from agent import (  # noqa: F401
+    build_agent_tool_specs,
+    build_nous_tools_instruction,
+    inject_tools_into_messages,
+    parse_assistant_tool_calls,
+    parse_stream_delta_for_tool_events,
+    execute_agent_tool,
+    make_tool_response_message,
+    run_agent_non_stream,
+)
+
+from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 logger = logging.getLogger(__name__)
 
 
-def env_bool(key: str, default: bool = False) -> bool:
-    """Parse env var as boolean: '1', 'true', 'yes' → True, everything else → False."""
-    return os.getenv(key, "").strip().lower() in {"1", "true", "yes"}
-
-
-def env_int(key: str, default: int) -> int:
-    """Parse env var as int with fallback."""
-    try:
-        return int(os.getenv(key, str(default)))
-    except (ValueError, TypeError):
-        return default
-
-
-def env_float(key: str, default: float) -> float:
-    """Parse env var as float with fallback."""
-    try:
-        return float(os.getenv(key, str(default)))
-    except (ValueError, TypeError):
-        return default
-
-
-LLM_BASE_URL = os.getenv("AIUI_LLM_BASE_URL", "http://host.docker.internal:8081").rstrip("/")
-DEFAULT_MODEL = os.getenv("AIUI_DEFAULT_MODEL", os.getenv("CHAT_MODEL", "Qwen3-Coder-30B-A3B-Instruct-Q5_K_M.gguf"))
-REQUEST_TIMEOUT_SECONDS = int(os.getenv("AIUI_REQUEST_TIMEOUT_SECONDS", "120"))
-SYSTEM_PROMPT = os.getenv("AIUI_SYSTEM_PROMPT", "You are a concise, helpful assistant.").strip()
-# CANONICAL MATH DELIMITER CONTRACT: See MATH_DELIMITERS_CONTRACT.json for the contract.
-# Backend guidance: Use $...$ for inline math, $$...$$ for display math (KaTeX-compatible).
-RESPONSE_FORMAT_GUIDANCE = (
-    "Response format requirements:\n"
-    "- Return valid Markdown.\n"
-    "- Use $...$ for inline math. Use $$...$$ for display math.\n"
-    "- Every math delimiter must be balanced and closed.\n"
-    "- Before finishing, verify there are no unmatched $ or $$.\n"
-    "- Do not place LaTeX outside math delimiters.\n"
-    "- Do not wrap equations in bold or italics.\n"
-    "- Leave a blank line before and after headings, lists, and display equations.\n"
-    "- Keep lists valid and consistently indented.\n"
-    "- Do not emit truncated or unfinished sentences.\n"
-    "- Close all formatting markers: **, _, and code fences."
-)
-DEFAULT_API_KEY = os.getenv("AIUI_OPENAI_API_KEY", "").strip()
-UPSTREAM_HEALTH_TIMEOUT_SECONDS = env_float("AIUI_UPSTREAM_HEALTH_TIMEOUT_SECONDS", 8.0)
-CONTEXT_BUDGET_TOKENS = env_int("AIUI_CONTEXT_BUDGET_TOKENS", 4096)
-CONTEXT_REPLY_RESERVE_TOKENS = env_int("AIUI_CONTEXT_REPLY_RESERVE_TOKENS", 1024)
-MODULE_CATALOG_CACHE_TTL_SECONDS = env_float("AIUI_MODULE_CATALOG_CACHE_TTL_SECONDS", 60.0)
-AGENT_MAX_LLM_CALLS_PER_RUN = env_int("AIUI_AGENT_MAX_LLM_CALLS_PER_RUN", 6)
-AGENT_MAX_TOOL_CALLS_PER_TURN = env_int("AIUI_AGENT_MAX_TOOL_CALLS_PER_TURN", 4)
-AGENT_ENABLE_NON_STREAM_LOOP = env_bool("AIUI_AGENT_ENABLE_NON_STREAM_LOOP", True)
-AGENT_ENABLE_STREAM_LOOP = env_bool("AIUI_AGENT_ENABLE_STREAM_LOOP", True)
-AGENT_TOOL_PROFILE = os.getenv("AIUI_AGENT_TOOL_PROFILE", "safe").strip().lower() or "safe"
-AGENT_TOOL_STRATEGY = os.getenv("AIUI_AGENT_TOOL_STRATEGY", "nous").strip().lower() or "nous"
-AGENT_ENABLED_TOOLS_RAW = os.getenv("AIUI_AGENT_ENABLED_TOOLS", "").strip()
-# SECURITY: Disable doc/ppt external extractors by default to avoid unexpected process spawning.
-# Set AIUI_ENABLE_EXTERNAL_EXTRACTORS=1 to enable catppt, catdoc, antiword extraction.
-ENABLE_EXTERNAL_EXTRACTORS = env_bool("AIUI_ENABLE_EXTERNAL_EXTRACTORS", False)
-MAX_ATTACHMENTS = env_int("AIUI_MAX_ATTACHMENTS", env_int("AIUI_MAX_IMAGE_ATTACHMENTS", 4))
-MAX_ATTACHMENT_DATA_URL_CHARS = env_int(
-    "AIUI_MAX_ATTACHMENT_DATA_URL_CHARS", env_int("AIUI_MAX_IMAGE_DATA_URL_CHARS", 8000000)
-)
-MAX_DOCUMENT_BYTES = env_int("AIUI_MAX_DOCUMENT_BYTES", 12000000)
-MAX_DOCUMENT_TEXT_CHARS = env_int("AIUI_MAX_DOCUMENT_TEXT_CHARS", 16000)
-MAX_TOTAL_DOCUMENT_TEXT_CHARS = env_int("AIUI_MAX_TOTAL_DOCUMENT_TEXT_CHARS", 48000)
-IMAGE_PART_TOKEN_ESTIMATE = env_int("AIUI_IMAGE_PART_TOKEN_ESTIMATE", 768)
-PARKER_EVIDENCE_LABEL_RE = re.compile(r"\[E\d+\]")
-PARKER_EVIDENCE_BULLET_RE = re.compile(r"(?mi)^\s*-\s*\[E\d+\]\s+")
-TOOL_CALL_BLOCK_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.IGNORECASE | re.DOTALL)
-THINK_BLOCK_RE = re.compile(r"<think>[\s\S]*?</think>\s*", re.IGNORECASE)
-_MODULE_CATALOG_CACHE: dict[str, Any] = {"expires_at": 0.0, "body": None}
-DEFAULT_AGENT_TOOL_NAMES = [
-    "get_current_time",
-    "calculator",
-    "search_conversation",
-    "read_file",
-    "write_file",
-    "grep_search",
-    "file_glob_search",
-    "exec_shell_command",
-    "edit_file",
-    "apply_diff",
-]
-SAFE_AGENT_TOOL_NAMES = [
-    "get_current_time",
-    "calculator",
-    "search_conversation",
-    "read_file",
-    "grep_search",
-    "file_glob_search",
-]
-MINIMAL_AGENT_TOOL_NAMES = [
-    "get_current_time",
-    "calculator",
-    "search_conversation",
-]
-AGENT_TOOL_PROFILES: dict[str, list[str] | None] = {
-    "safe": SAFE_AGENT_TOOL_NAMES,
-    "minimal": MINIMAL_AGENT_TOOL_NAMES,
-    "trusted": None,
-    "all": None,
-}
-AGENT_ALLOWED_STRATEGIES = set(list_strategies())
-TEXT_DOCUMENT_EXTENSIONS = {
-    ".txt",
-    ".md",
-    ".markdown",
-    ".rst",
-    ".csv",
-    ".tsv",
-    ".json",
-    ".jsonl",
-    ".yaml",
-    ".yml",
-    ".xml",
-    ".html",
-    ".htm",
-    ".css",
-    ".js",
-    ".ts",
-    ".py",
-    ".log",
-}
-WORDPROCESSINGML_NAMESPACE = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
-DRAWINGML_TEXT_TAG = "{http://schemas.openxmlformats.org/drawingml/2006/main}t"
-
+# ── Tool manager initialisation ────────────────────────────────────────────
 
 def _parse_enabled_tool_names(raw: str) -> list[str] | None:
     value = str(raw or "").strip()
@@ -229,7 +187,7 @@ AGENT_TOOL_MANAGER = _init_tool_manager(
 )
 
 
-def resolve_tool_manager_for_request(req: "ChatRequest") -> ToolManager:
+def resolve_tool_manager_for_request(req: ChatRequest) -> ToolManager:
     return _init_tool_manager(
         profile=req.agent_tool_profile,
         strategy=req.agent_tool_strategy,
@@ -237,277 +195,7 @@ def resolve_tool_manager_for_request(req: "ChatRequest") -> ToolManager:
     )
 
 
-def build_agent_tool_specs(tool_manager: ToolManager | None = None) -> list[dict[str, Any]]:
-    manager = tool_manager or AGENT_TOOL_MANAGER
-    return [schema.get("function", {}) for schema in manager.get_tool_schemas()]
-
-
-def build_nous_tools_instruction(tool_specs: list[dict[str, Any]], tool_manager: ToolManager | None = None) -> str:
-    _ = tool_specs
-    manager = tool_manager or AGENT_TOOL_MANAGER
-    return manager.get_tools_instruction()
-
-
-def inject_tools_into_messages(
-    messages: list[dict[str, Any]],
-    tool_specs: list[dict[str, Any]],
-    tool_manager: ToolManager | None = None,
-) -> list[dict[str, Any]]:
-    if not tool_specs:
-        return messages
-
-    out = copy.deepcopy(messages)
-    manager = tool_manager or AGENT_TOOL_MANAGER
-    tool_instruction = manager.get_tools_instruction()
-
-    if out and out[0].get("role") == "system":
-        current = str(out[0].get("content") or "")
-        if "<tools>" not in current:
-            out[0]["content"] = f"{current}\n\n{tool_instruction}".strip()
-    else:
-        out.insert(0, {"role": "system", "content": tool_instruction})
-    return out
-
-
-def _parse_tool_call_payload(raw_payload: str) -> tuple[str, dict[str, Any]] | None:
-    payload = str(raw_payload or "").strip()
-    if not payload:
-        return None
-    try:
-        parsed = json.loads(payload)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(parsed, dict):
-        return None
-
-    name = str(parsed.get("name") or "").strip()
-    if not name:
-        return None
-    arguments = parsed.get("arguments")
-    if isinstance(arguments, str):
-        try:
-            arguments = json.loads(arguments)
-        except json.JSONDecodeError:
-            arguments = {"raw": arguments}
-    if not isinstance(arguments, dict):
-        arguments = {}
-    return name, arguments
-
-
-def parse_assistant_tool_calls(
-    text: str,
-    tool_manager: ToolManager | None = None,
-) -> tuple[list[tuple[str, dict[str, Any]]], str]:
-    if not text:
-        return [], ""
-
-    calls: list[tuple[str, dict[str, Any]]] = []
-    manager = tool_manager or AGENT_TOOL_MANAGER
-    parsed_calls = manager.parse_tool_calls(text)
-    for call in parsed_calls:
-        name = str(call.get("name") or "").strip()
-        args = call.get("arguments")
-        if name and isinstance(args, dict):
-            calls.append((name, args))
-
-    if not calls:
-        for match in TOOL_CALL_BLOCK_RE.finditer(text):
-            parsed = _parse_tool_call_payload(match.group(1))
-            if parsed is not None:
-                calls.append(parsed)
-
-    visible_text = TOOL_CALL_BLOCK_RE.sub("", text).strip()
-    return calls, visible_text
-
-
-def parse_stream_delta_for_tool_events(
-    buffer: str,
-) -> tuple[list[str], list[dict[str, Any]], str]:
-    """Extract complete <tool_call> blocks from a streaming buffer.
-
-    Returns:
-      visible_chunks: text segments safe to render to user.
-      tool_events: parsed tool call events.
-      remainder: partial tail to keep buffering.
-    """
-    visible_chunks: list[str] = []
-    tool_events: list[dict[str, Any]] = []
-    working = str(buffer or "")
-
-    while True:
-        match = TOOL_CALL_BLOCK_RE.search(working)
-        if not match:
-            # Keep a small tail in case a <tool_call> tag is split across chunks.
-            keep_tail = len("<tool_call>") - 1
-            if len(working) > keep_tail:
-                visible_chunks.append(working[:-keep_tail])
-                working = working[-keep_tail:]
-            return visible_chunks, tool_events, working
-
-        before = working[: match.start()]
-        if before:
-            visible_chunks.append(before)
-
-        parsed = _parse_tool_call_payload(match.group(1))
-        if parsed is not None:
-            tool_name, tool_args = parsed
-            tool_events.append({"type": "tool_call", "name": tool_name, "arguments": tool_args})
-
-        working = working[match.end() :]
-
-
-def safe_eval_arithmetic(expression: str) -> float:
-    allowed_ops: dict[type, Any] = {
-        ast.Add: operator.add,
-        ast.Sub: operator.sub,
-        ast.Mult: operator.mul,
-        ast.Div: operator.truediv,
-        ast.FloorDiv: operator.floordiv,
-        ast.Mod: operator.mod,
-        ast.Pow: operator.pow,
-        ast.USub: operator.neg,
-        ast.UAdd: operator.pos,
-    }
-
-    def _eval(node: ast.AST) -> float:
-        if isinstance(node, ast.Expression):
-            return _eval(node.body)
-        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
-            return float(node.value)
-        if isinstance(node, ast.UnaryOp) and type(node.op) in allowed_ops:
-            return float(allowed_ops[type(node.op)](_eval(node.operand)))
-        if isinstance(node, ast.BinOp) and type(node.op) in allowed_ops:
-            left = _eval(node.left)
-            right = _eval(node.right)
-            return float(allowed_ops[type(node.op)](left, right))
-        raise ValueError("Expression contains unsupported syntax")
-
-    tree = ast.parse(expression, mode="eval")
-    return _eval(tree)
-
-
-def execute_agent_tool(
-    *,
-    tool_name: str,
-    tool_args: dict[str, Any],
-    messages: list[dict[str, Any]],
-    tool_manager: ToolManager | None = None,
-) -> dict[str, Any]:
-    kwargs = dict(tool_args or {})
-    if tool_name == "search_conversation":
-        kwargs["conversation_messages"] = messages
-    manager = tool_manager or AGENT_TOOL_MANAGER
-    try:
-        raw_result = manager.execute_tool(tool_name, **kwargs)
-    except ToolError as exc:
-        return {"error": f"{exc.code}: {exc.message}"}
-    except Exception as exc:
-        return {"error": str(exc)}
-
-    if isinstance(raw_result, str):
-        text = raw_result.strip()
-        if not text:
-            return {"result": ""}
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            return {"result": text}
-        if isinstance(parsed, dict):
-            return parsed
-        return {"result": parsed}
-    if isinstance(raw_result, dict):
-        return raw_result
-    return {"result": raw_result}
-
-
-def make_tool_response_message(tool_result: dict[str, Any]) -> dict[str, str]:
-    return {
-        "role": "user",
-        "content": "<tool_response>\n"
-        + json.dumps(tool_result, ensure_ascii=False)
-        + "\n</tool_response>",
-    }
-
-
-async def run_agent_non_stream(
-    *,
-    messages: list[dict[str, Any]],
-    model: str,
-    mode: str | None,
-    temperature: float,
-    max_tokens: int | None,
-    tool_manager: ToolManager,
-) -> str:
-    tool_specs = build_agent_tool_specs(tool_manager)
-    working_messages = inject_tools_into_messages(messages, tool_specs, tool_manager)
-
-    last_visible_text = ""
-    for _ in range(max(1, AGENT_MAX_LLM_CALLS_PER_RUN)):
-        assistant_text = await call_llm_chat(
-            messages=working_messages,
-            model=model,
-            mode=mode,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-        tool_calls, visible_text = parse_assistant_tool_calls(assistant_text, tool_manager)
-        if visible_text:
-            last_visible_text = visible_text
-
-        if not tool_calls:
-            return visible_text or assistant_text
-
-        working_messages.append({"role": "assistant", "content": assistant_text})
-
-        calls_to_execute = tool_calls[: max(1, AGENT_MAX_TOOL_CALLS_PER_TURN)]
-        for tool_name, tool_args in calls_to_execute:
-            tool_result = execute_agent_tool(
-                tool_name=tool_name,
-                tool_args=tool_args,
-                messages=working_messages,
-                tool_manager=tool_manager,
-            )
-            wrapped_result = {
-                "tool": tool_name,
-                "arguments": tool_args,
-                "result": tool_result,
-            }
-            working_messages.append(make_tool_response_message(wrapped_result))
-
-    if last_visible_text:
-        return last_visible_text
-    return "I could not finish tool planning within the safety limit."
-
-
-class Attachment(BaseModel):
-    type: Literal["image", "document"] = "image"
-    data_url: str = Field(default="", max_length=10000000)
-    name: str = Field(default="", max_length=260)
-    mime_type: str = Field(default="", max_length=200)
-
-
-class HistoryMessage(BaseModel):
-    role: Literal["user", "assistant"]
-    content: str
-    attachments: list[Attachment] = Field(default_factory=list)
-
-
-class ChatRequest(BaseModel):
-    message: str
-    history: list[HistoryMessage] = Field(default_factory=list)
-    attachments: list[Attachment] = Field(default_factory=list)
-    context_summary: str | None = Field(default=None, max_length=4000)
-    context_budget_tokens: int | None = Field(default=None, ge=0, le=128000)
-    model: str | None = None
-    mode: str | None = Field(default=None, max_length=64)
-    context_mode: Literal["trim", "summarize"] | None = None
-    stream: bool = True
-    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
-    max_tokens: int | None = Field(default=None, ge=1, le=32768)
-    agent_tool_profile: str | None = Field(default=None, max_length=32)
-    agent_tool_strategy: str | None = Field(default=None, max_length=32)
-    agent_enabled_tools: str | None = Field(default=None, max_length=4000)
-
+# ── HTTP helpers ───────────────────────────────────────────────────────────
 
 def sse_event(payload: dict[str, Any]) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -517,7 +205,6 @@ _CODING_MODES = frozenset({"code", "coding", "coder", "dev", "develop", "agent"}
 
 
 def resolve_llm_base_url(mode: str | None) -> str:
-    """Return the single LLM base URL (8081 — Qwen3-1.7B)."""
     return LLM_BASE_URL
 
 
@@ -546,42 +233,12 @@ def build_health_timeout() -> httpx.Timeout:
     )
 
 
-# Rate limiting and attachment abuse guardrails
-_REQUEST_TIMESTAMPS: list[float] = []  # Track per-second request rate
-_MAX_REQUESTS_PER_SECOND = int(os.getenv("AIUI_MAX_REQUESTS_PER_SECOND", "10"))
-_MAX_ATTACHMENT_BYTES_PER_REQUEST = int(os.getenv("AIUI_MAX_ATTACHMENT_BYTES_PER_REQUEST", "25000000"))
-
-
 def check_rate_limit() -> None:
-    """Enforce per-second rate limit to prevent abuse."""
     now = time.perf_counter()
     _REQUEST_TIMESTAMPS[:] = [t for t in _REQUEST_TIMESTAMPS if now - t < 1.0]
     if len(_REQUEST_TIMESTAMPS) >= _MAX_REQUESTS_PER_SECOND:
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
     _REQUEST_TIMESTAMPS.append(now)
-
-
-def validate_attachments(attachments: list[Attachment]) -> None:
-    """Enforce attachment size and count guardrails to prevent abuse."""
-    if len(attachments) > MAX_ATTACHMENTS:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Too many attachments (max {MAX_ATTACHMENTS}), got {len(attachments)}",
-        )
-    total_bytes = 0
-    for a in attachments:
-        if a.data_url:
-            try:
-                # data_url may be "data:<mime>;base64,<payload>" or raw base64
-                raw = a.data_url.split(",", 1)[-1] if "," in a.data_url else a.data_url
-                total_bytes += len(base64.b64decode(raw))
-            except (binascii.Error, ValueError):
-                pass  # Invalid base64; will be caught elsewhere
-    if total_bytes > _MAX_ATTACHMENT_BYTES_PER_REQUEST:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Attachment payload too large (max {_MAX_ATTACHMENT_BYTES_PER_REQUEST} bytes), got {total_bytes}",
-        )
 
 
 def format_httpx_error(exc: httpx.HTTPError) -> str:
@@ -611,6 +268,8 @@ def format_httpx_error(exc: httpx.HTTPError) -> str:
         return f"{exc.__class__.__name__}: {base}"
     return exc.__class__.__name__
 
+
+# ── Module catalog ─────────────────────────────────────────────────────────
 
 def build_fallback_module_catalog(*, upstream_error: str | None = None) -> dict[str, Any]:
     return {
@@ -672,236 +331,7 @@ async def load_module_catalog() -> dict[str, Any]:
     return dict(result)
 
 
-def attachment_name(item: Attachment, *, fallback: str = "attachment") -> str:
-    candidate = Path(str(item.name or "").strip()).name
-    return candidate or fallback
-
-
-def decode_attachment_data_url(data_url: str) -> tuple[str, bytes]:
-    prefix, sep, payload = str(data_url or "").partition(",")
-    if sep != "," or not prefix.lower().startswith("data:"):
-        raise ValueError("attachment is not a valid data URL")
-
-    metadata = prefix[5:]
-    mime_type = "application/octet-stream"
-    is_base64 = False
-    if metadata:
-        parts = [part.strip() for part in metadata.split(";") if part.strip()]
-        if parts and "=" not in parts[0]:
-            mime_type = parts[0].lower()
-            parts = parts[1:]
-        is_base64 = any(part.lower() == "base64" for part in parts)
-
-    try:
-        raw_bytes = (
-            base64.b64decode(payload, validate=False) if is_base64 else urllib.parse.unquote_to_bytes(payload)
-        )
-    except (binascii.Error, ValueError) as exc:
-        raise ValueError("attachment data URL could not be decoded") from exc
-
-    return mime_type, raw_bytes
-
-
-def normalize_image_attachments(attachments: list[Attachment]) -> list[str]:
-    out: list[str] = []
-    for item in attachments:
-        if len(out) >= max(1, MAX_ATTACHMENTS):
-            break
-        if item.type != "image":
-            continue
-        data_url = (item.data_url or "").strip()
-        if not data_url:
-            continue
-        if len(data_url) > max(1024, MAX_ATTACHMENT_DATA_URL_CHARS):
-            continue
-        if not data_url.lower().startswith("data:image/"):
-            continue
-        out.append(data_url)
-    return out
-
-
-def normalize_document_text(text: str, *, max_chars: int) -> str:
-    if max_chars <= 0:
-        return ""
-    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in str(text or "").splitlines()]
-    cleaned = "\n".join(line for line in lines if line).strip()
-    if not cleaned:
-        return ""
-    if len(cleaned) <= max_chars:
-        return cleaned
-    return f"{cleaned[: max(1, max_chars - 1)].rstrip()}…"
-
-
-def decode_text_document(raw_bytes: bytes) -> str:
-    for encoding in ("utf-8", "utf-16", "utf-16le", "utf-16be", "latin-1"):
-        try:
-            return raw_bytes.decode(encoding)
-        except UnicodeDecodeError:
-            continue
-    return raw_bytes.decode("utf-8", errors="replace")
-
-
-def extract_docx_text(raw_bytes: bytes) -> str:
-    paragraphs: list[str] = []
-    with zipfile.ZipFile(io.BytesIO(raw_bytes)) as archive:
-        document_xml = archive.read("word/document.xml")
-    root = ET.fromstring(document_xml)
-    for paragraph in root.findall(".//w:p", WORDPROCESSINGML_NAMESPACE):
-        runs = [node.text for node in paragraph.findall(".//w:t", WORDPROCESSINGML_NAMESPACE) if node.text]
-        if runs:
-            paragraphs.append("".join(runs))
-    return "\n".join(paragraphs)
-
-
-def extract_pptx_text(raw_bytes: bytes) -> str:
-    slides_out: list[str] = []
-    with zipfile.ZipFile(io.BytesIO(raw_bytes)) as archive:
-        slide_names = sorted(
-            name
-            for name in archive.namelist()
-            if name.startswith("ppt/slides/slide") and name.endswith(".xml")
-        )
-        for index, slide_name in enumerate(slide_names, start=1):
-            root = ET.fromstring(archive.read(slide_name))
-            texts = [node.text for node in root.iter(DRAWINGML_TEXT_TAG) if node.text]
-            if texts:
-                slides_out.append(f"Slide {index}: {' '.join(texts)}")
-    return "\n\n".join(slides_out)
-
-
-def extract_pdf_text(raw_bytes: bytes) -> str:
-    try:
-        from pypdf import PdfReader
-    except ImportError:
-        return ""
-
-    reader = PdfReader(io.BytesIO(raw_bytes))
-    pages: list[str] = []
-    for page in reader.pages:
-        extracted = str(page.extract_text() or "").strip()
-        if extracted:
-            pages.append(extracted)
-    return "\n\n".join(pages)
-
-
-def run_external_document_extractor(
-    commands: list[list[str]],
-    *,
-    raw_bytes: bytes,
-    suffix: str,
-) -> str:
-    for command in commands:
-        executable = shutil.which(command[0])
-        if not executable:
-            continue
-        with tempfile.NamedTemporaryFile(suffix=suffix) as temp_file:
-            temp_file.write(raw_bytes)
-            temp_file.flush()
-            try:
-                result = subprocess.run(
-                    [executable, *command[1:], temp_file.name],
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=20,
-                    check=False,
-                )
-            except (OSError, subprocess.SubprocessError):
-                continue
-        extracted = str(result.stdout or "").strip()
-        if extracted:
-            return extracted
-    return ""
-
-
-def extract_document_text(item: Attachment) -> str:
-    data_url = str(item.data_url or "").strip()
-    if not data_url:
-        return ""
-    if len(data_url) > max(1024, MAX_ATTACHMENT_DATA_URL_CHARS):
-        return ""
-
-    try:
-        parsed_mime_type, raw_bytes = decode_attachment_data_url(data_url)
-    except ValueError:
-        return ""
-
-    if len(raw_bytes) > max(1, MAX_DOCUMENT_BYTES):
-        return ""
-
-    mime_type = (item.mime_type or parsed_mime_type or "").strip().lower()
-    name = attachment_name(item, fallback="document")
-    suffix = Path(name).suffix.lower()
-    guessed_mime_type, _encoding = mimetypes.guess_type(name)
-    if not mime_type and guessed_mime_type:
-        mime_type = guessed_mime_type.lower()
-
-    try:
-        if mime_type.startswith("text/") or suffix in TEXT_DOCUMENT_EXTENSIONS:
-            return decode_text_document(raw_bytes)
-        if mime_type == "application/pdf" or suffix == ".pdf":
-            return extract_pdf_text(raw_bytes)
-        if (
-            mime_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            or suffix == ".docx"
-        ):
-            return extract_docx_text(raw_bytes)
-        if mime_type in {"application/vnd.ms-powerpoint", "application/mspowerpoint"} or suffix == ".ppt":
-            if not ENABLE_EXTERNAL_EXTRACTORS:
-                return ""  # External extractors disabled by default; set AIUI_ENABLE_EXTERNAL_EXTRACTORS=1
-            return run_external_document_extractor([["catppt"]], raw_bytes=raw_bytes, suffix=".ppt")
-        if suffix == ".doc" or mime_type == "application/msword":
-            if not ENABLE_EXTERNAL_EXTRACTORS:
-                return ""  # External extractors disabled by default; set AIUI_ENABLE_EXTERNAL_EXTRACTORS=1
-            return run_external_document_extractor(
-                [["catdoc"], ["antiword"]],
-                raw_bytes=raw_bytes,
-                suffix=".doc",
-            )
-        if (
-            mime_type == "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-            or suffix == ".pptx"
-        ):
-            return extract_pptx_text(raw_bytes)
-    except Exception:
-        return ""
-
-    return decode_text_document(raw_bytes) if suffix in TEXT_DOCUMENT_EXTENSIONS else ""
-
-
-def build_document_context(attachments: list[Attachment]) -> str:
-    blocks: list[str] = []
-    remaining_chars = max(0, MAX_TOTAL_DOCUMENT_TEXT_CHARS)
-    for item in attachments:
-        if item.type != "document":
-            continue
-        if remaining_chars <= 0:
-            break
-
-        name = attachment_name(item, fallback="document")
-        extracted = extract_document_text(item)
-        guidance = "PDF, DOCX, PPTX, TXT, Markdown, CSV, and JSON work best."
-        if extracted:
-            normalized = normalize_document_text(
-                extracted,
-                max_chars=min(MAX_DOCUMENT_TEXT_CHARS, remaining_chars),
-            )
-            if normalized:
-                blocks.append(f"[Attached document: {name}]\n{normalized}")
-                remaining_chars -= len(normalized)
-                continue
-
-        blocks.append(
-            f"[Attached document: {name}]\n"
-            f"(The file was attached, but its text could not be extracted here. {guidance})"
-        )
-        remaining_chars -= min(remaining_chars, 240)
-
-    if not blocks:
-        return ""
-    return "Attached documents:\n\n" + "\n\n".join(blocks)
-
+# ── Message building ───────────────────────────────────────────────────────
 
 def build_user_text(text: str, attachments: list[Attachment]) -> str:
     clean_text = str(text or "").strip()
@@ -1005,32 +435,6 @@ def sanitize_context_summary(summary: str, *, mode: str) -> str:
     return "\n".join([*header_lines, *body_lines]).strip()
 
 
-def combine_context_summaries(*summaries: str) -> str:
-    parts = [str(summary or "").strip() for summary in summaries if str(summary or "").strip()]
-    return "\n\n".join(parts)
-
-
-def build_summary_system_prompt(system_prompt: str, context_summary: str) -> str:
-    cleaned_system_prompt = str(system_prompt or "").strip()
-    cleaned_context_summary = str(context_summary or "").strip()
-
-    # Inject current date/time so the model always knows when it is.
-    from datetime import datetime, timezone
-    now = datetime.now(timezone.utc)
-    date_line = f"Today's date and time (UTC): {now.strftime('%A, %d %B %Y, %H:%M')} UTC."
-    if cleaned_system_prompt:
-        cleaned_system_prompt = f"{cleaned_system_prompt}\n{date_line}"
-    else:
-        cleaned_system_prompt = date_line
-
-    cleaned_system_prompt = f"{cleaned_system_prompt}\n\n{RESPONSE_FORMAT_GUIDANCE}".strip()
-
-    if not cleaned_context_summary:
-        return cleaned_system_prompt
-    summary_block = f"Older conversation summary:\n{cleaned_context_summary}"
-    return f"{cleaned_system_prompt}\n\n{summary_block}"
-
-
 def normalize_history(history: list[HistoryMessage], *, mode: str = "chat") -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for item in history:
@@ -1038,7 +442,6 @@ def normalize_history(history: list[HistoryMessage], *, mode: str = "chat") -> l
         if item.role == "assistant":
             if not text:
                 continue
-            # Qwen best practice: strip thinking blocks from history
             text = THINK_BLOCK_RE.sub("", text).strip()
             if not text:
                 continue
@@ -1053,243 +456,6 @@ def normalize_history(history: list[HistoryMessage], *, mode: str = "chat") -> l
                 continue
             out.append({"role": "user", "content": build_user_content(text, image_data_urls)})
     return out
-
-
-def compact_text(text: Any, max_len: int) -> str:
-    normalized = " ".join(str(text or "").split()).strip()
-    if not normalized:
-        return ""
-    if len(normalized) <= max_len:
-        return normalized
-    return f"{normalized[: max(1, max_len - 1)]}…"
-
-
-def estimate_text_tokens(text: str) -> int:
-    clean = str(text or "").strip()
-    if not clean:
-        return 0
-    # Lightweight estimate: roughly 1 token per ~4 characters.
-    return max(1, math.ceil(len(clean) / 4))
-
-
-def estimate_content_tokens(content: Any) -> int:
-    if isinstance(content, str):
-        return estimate_text_tokens(content)
-
-    if isinstance(content, list):
-        total = 0
-        for part in content:
-            if not isinstance(part, dict):
-                continue
-            part_type = str(part.get("type") or "")
-            if part_type == "text":
-                total += estimate_text_tokens(str(part.get("text") or ""))
-            elif part_type == "image_url":
-                total += max(1, IMAGE_PART_TOKEN_ESTIMATE)
-        return total
-
-    if isinstance(content, dict):
-        maybe_text = content.get("text")
-        if isinstance(maybe_text, str):
-            return estimate_text_tokens(maybe_text)
-
-    # Ensure we always return an integer, default to 0 if conversion fails
-    try:
-        return estimate_text_tokens(str(content or ""))
-    except (TypeError, ValueError):
-        return 0
-
-
-def estimate_messages_tokens(messages: list[dict[str, Any]]) -> int:
-    total = 0
-    for message in messages:
-        if not isinstance(message, dict):
-            continue
-        total += estimate_content_tokens(message.get("content", ""))
-    return total
-
-
-def extract_summary_text(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for part in content:
-            if not isinstance(part, dict):
-                continue
-            part_type = str(part.get("type") or "").strip()
-            if part_type == "text":
-                text_part = str(part.get("text") or "").strip()
-                if text_part:
-                    parts.append(text_part)
-        return " ".join(parts).strip()
-    if isinstance(content, dict):
-        text_value = content.get("text")
-        if isinstance(text_value, str):
-            return text_value
-    return str(content or "").strip()
-
-
-def count_summary_images(content: Any) -> int:
-    if isinstance(content, list):
-        total = 0
-        for part in content:
-            if not isinstance(part, dict):
-                continue
-            if str(part.get("type") or "").strip() == "image_url":
-                total += 1
-        return total
-    return 0
-
-
-def build_context_summary(
-    messages: list[dict[str, Any]],
-    *,
-    max_items: int = 8,
-    max_chars_per_item: int = 180,
-    max_total_chars: int = 1800,
-) -> str:
-    if not messages:
-        return ""
-
-    lines: list[str] = []
-    for message in messages[-max(1, int(max_items)) :]:
-        if not isinstance(message, dict):
-            continue
-        role = "assistant" if str(message.get("role") or "").strip() == "assistant" else "user"
-        snippet = compact_text(extract_summary_text(message.get("content")), max(40, int(max_chars_per_item)))
-        image_count = count_summary_images(message.get("content"))
-        if not snippet and image_count <= 0:
-            continue
-        suffix = f" [{image_count} image{'s' if image_count != 1 else ''}]" if image_count > 0 else ""
-        lines.append(f"- {role}: {snippet or '(image attachment)'}{suffix}")
-
-    if not lines:
-        return ""
-
-    summary = f"Older conversation summary (latest trimmed turns):\n{chr(10).join(lines)}"
-    if len(summary) > max(200, int(max_total_chars)):
-        summary = f"{summary[: max(1, int(max_total_chars) - 1)]}…"
-    return summary
-
-
-def safe_add_ints(a: Any, b: Any) -> int:
-    """Safely add two values, converting to int if needed."""
-    try:
-        # Ensure we convert to integers with explicit handling
-        int_a = int(a) if a is not None else 0
-        int_b = int(b) if b is not None else 0
-        return int_a + int_b
-    except (TypeError, ValueError):
-        # Fallback in case of any other error
-        return 0
-
-
-def select_context_budget_indices(
-    messages: list[dict[str, Any]],
-    budget_tokens: int,
-    reserve_tokens: int = 0,
-) -> list[int]:
-    if budget_tokens <= 0 or not messages:
-        return list(range(len(messages)))
-
-    budget_tokens = int(budget_tokens) if budget_tokens is not None else 0
-    reserve_tokens = int(reserve_tokens) if reserve_tokens is not None else 0
-    usable_budget = budget_tokens - max(0, reserve_tokens)
-    usable_budget = max(128, usable_budget)
-
-    selected_indices: set[int] = set()
-    last_index = len(messages) - 1
-    last_message_tokens = estimate_content_tokens(messages[last_index].get("content", ""))
-    selected_indices.add(last_index)
-    used_tokens = last_message_tokens
-
-    for idx in range(last_index - 1, -1, -1):
-        role = messages[idx].get("role")
-        if role == "system":
-            continue
-        token_cost = estimate_content_tokens(messages[idx].get("content", ""))
-        if token_cost <= 0:
-            continue
-        if used_tokens + token_cost > usable_budget:
-            continue
-        selected_indices.add(idx)
-        used_tokens += token_cost
-
-    system_indices = [idx for idx, msg in enumerate(messages) if msg.get("role") == "system"]
-    if system_indices:
-        first_system = system_indices[0]
-        system_token_cost = estimate_content_tokens(messages[first_system].get("content", ""))
-        if used_tokens + system_token_cost <= usable_budget:
-            selected_indices.add(first_system)
-
-    return sorted(selected_indices)
-
-
-def split_messages_by_context_budget(
-    messages: list[dict[str, Any]],
-    budget_tokens: int,
-    reserve_tokens: int = 0,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    selected_indices = set(
-        select_context_budget_indices(
-            messages,
-            budget_tokens=budget_tokens,
-            reserve_tokens=reserve_tokens,
-        )
-    )
-    kept: list[dict[str, Any]] = []
-    dropped: list[dict[str, Any]] = []
-    for idx, message in enumerate(messages):
-        if idx in selected_indices:
-            kept.append(message)
-        else:
-            dropped.append(message)
-    return kept, dropped
-
-
-def apply_context_budget(
-    messages: list[dict[str, Any]],
-    budget_tokens: int,
-    reserve_tokens: int = 0,
-) -> list[dict[str, Any]]:
-    if budget_tokens <= 0 or not messages:
-        return messages
-
-    # Keep leading system messages pinned so safety/format instructions are not
-    # trimmed away by downstream budgeting.
-    lead_system: list[dict[str, Any]] = []
-    remaining = list(messages)
-    while remaining and str(remaining[0].get("role") or "").strip().lower() == "system":
-        lead_system.append(remaining.pop(0))
-
-    if not remaining:
-        return lead_system
-
-    system_tokens = estimate_messages_tokens(lead_system) if lead_system else 0
-    remaining_budget = max(0, budget_tokens - system_tokens)
-    if remaining_budget <= 0:
-        return lead_system + [remaining[-1]]
-
-    kept, _dropped = split_messages_by_context_budget(
-        remaining,
-        budget_tokens=remaining_budget,
-        reserve_tokens=reserve_tokens,
-    )
-    return lead_system + kept
-
-
-def as_int(value: Any) -> int:
-    if value is None:
-        return 0
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        # Convert to string first to handle cases where it's not directly convertible
-        try:
-            return int(str(value))
-        except (TypeError, ValueError):
-            return 0
 
 
 def build_payload_messages(req: ChatRequest, *, mode: str) -> list[dict[str, Any]]:
@@ -1332,6 +498,8 @@ def build_payload_messages(req: ChatRequest, *, mode: str) -> list[dict[str, Any
         )
     return payload_messages
 
+
+# ── LLM call functions ────────────────────────────────────────────────────
 
 async def call_llm_chat(
     messages: list[dict[str, Any]],
@@ -1424,6 +592,8 @@ async def probe_upstream() -> tuple[bool, str | None]:
     return True, None
 
 
+# ── FastAPI application ────────────────────────────────────────────────────
+
 app = FastAPI(title="aiui", version="0.3.0")
 
 
@@ -1468,10 +638,9 @@ async def modules() -> dict[str, Any]:
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
-    # Apply rate limiting and attachment abuse guardrails
     check_rate_limit()
     validate_attachments(req.attachments)
-    
+
     text = build_user_text(req.message, req.attachments)
     request_images = normalize_image_attachments(req.attachments)
     if not text and not request_images:
@@ -1493,6 +662,7 @@ async def chat(req: ChatRequest):
                     temperature=req.temperature,
                     max_tokens=req.max_tokens,
                     tool_manager=request_tool_manager,
+                    call_llm_chat=call_llm_chat,
                 )
             else:
                 answer = await call_llm_chat(
@@ -1520,7 +690,6 @@ async def chat(req: ChatRequest):
             yield sse_event({"type": "meta", "model": model})
             max_turns = max(1, AGENT_MAX_LLM_CALLS_PER_RUN if AGENT_ENABLE_STREAM_LOOP else 1)
             for turn_index in range(max_turns):
-                turn_usage: dict[str, Any] = {}
                 turn_tool_parse_buffer = ""
                 turn_emitted_tool_calls: list[tuple[str, dict[str, Any]]] = []
                 assistant_turn_raw_parts: list[str] = []
@@ -1538,7 +707,6 @@ async def chat(req: ChatRequest):
 
                     event_usage = upstream_event.get("usage")
                     if isinstance(event_usage, dict):
-                        turn_usage = event_usage
                         usage = event_usage
 
                     choices = upstream_event.get("choices")
@@ -1624,7 +792,6 @@ async def chat(req: ChatRequest):
         if completion_tokens <= 0:
             completion_tokens = estimate_text_tokens("".join(streamed_content_parts))
         if total_tokens <= 0:
-            # Use explicit integer conversion to avoid type errors
             total_tokens = safe_add_ints(context_tokens, completion_tokens)
         tokens_per_second = (completion_tokens / elapsed_seconds) if completion_tokens > 0 else 0.0
 

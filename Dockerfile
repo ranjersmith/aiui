@@ -25,7 +25,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir -r /app/requirements.txt
 
-COPY app.py /app/app.py
+COPY app.py config.py context.py agent.py extraction.py attachments.py /app/
 COPY tools /app/tools
 COPY --from=frontend-build /app/static /app/static
 
