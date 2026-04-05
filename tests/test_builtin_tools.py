@@ -1,12 +1,16 @@
 """Tests for individual tool execution (builtin_aiui tools)."""
 
 import json
-from tools.base import get_tool
+
+import pytest
+from tools.base import ToolError, get_tool
 
 
 class TestCalculatorTool:
     def setup_method(self):
         self.tool = get_tool("calculator")
+
+    # --- arithmetic happy paths ---
 
     def test_basic_addition(self):
         result = json.loads(self.tool.call(expression="2+3"))
@@ -27,6 +31,64 @@ class TestCalculatorTool:
     def test_power(self):
         result = json.loads(self.tool.call(expression="2**10"))
         assert result == 1024.0
+
+    def test_floor_division(self):
+        assert json.loads(self.tool.call(expression="7//2")) == 3.0
+
+    def test_modulo(self):
+        assert json.loads(self.tool.call(expression="10%3")) == 1.0
+
+    def test_unary_negative(self):
+        assert json.loads(self.tool.call(expression="-5+3")) == -2.0
+
+    def test_unary_positive(self):
+        assert json.loads(self.tool.call(expression="+5")) == 5.0
+
+    def test_float_literals(self):
+        assert json.loads(self.tool.call(expression="1.5+2.5")) == 4.0
+
+    def test_deeply_nested_parens(self):
+        assert json.loads(self.tool.call(expression="((((1+2))))")) == 3.0
+
+    # --- error handling ---
+
+    def test_division_by_zero(self):
+        with pytest.raises(ToolError, match="Division by zero"):
+            self.tool.call(expression="1/0")
+
+    def test_empty_expression(self):
+        with pytest.raises(ToolError):
+            self.tool.call(expression="")
+
+    # --- security: AST allowlist rejects dangerous input ---
+
+    def test_rejects_function_call(self):
+        with pytest.raises(ToolError):
+            self.tool.call(expression="__import__('os').system('id')")
+
+    def test_rejects_attribute_access(self):
+        with pytest.raises(ToolError):
+            self.tool.call(expression="().__class__.__bases__")
+
+    def test_rejects_name_lookup(self):
+        with pytest.raises(ToolError):
+            self.tool.call(expression="open")
+
+    def test_rejects_list_literal(self):
+        with pytest.raises(ToolError):
+            self.tool.call(expression="[1,2,3]")
+
+    def test_rejects_string_literal(self):
+        with pytest.raises(ToolError):
+            self.tool.call(expression="'hello'")
+
+    def test_rejects_lambda(self):
+        with pytest.raises(ToolError):
+            self.tool.call(expression="lambda: 1")
+
+    def test_rejects_walrus(self):
+        with pytest.raises(ToolError):
+            self.tool.call(expression="(x:=1)")
 
 
 class TestGetCurrentTimeTool:

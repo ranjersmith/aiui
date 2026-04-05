@@ -22,6 +22,7 @@ from .function_calling import get_strategy, list_strategies
 from . import builtin_llama  # noqa: F401
 from . import builtin_aiui  # noqa: F401
 from . import builtin_search  # noqa: F401
+from . import builtin_catalog  # noqa: F401
 
 __all__ = [
     "BaseTool",
